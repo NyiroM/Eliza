@@ -12,7 +12,7 @@ function applyCors(response: NextResponse, request: NextRequest): NextResponse {
   return response;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (request.method === "OPTIONS") {
     return applyCors(new NextResponse(null, { status: 204 }), request);
   }
