@@ -111,6 +111,17 @@ User data (CV, constraints) is written under **`/storage/`** at the project root
 
 ---
 
+## Quick Start (Windows)
+
+After you have cloned the repo and run **`npm install`** once in the project folder:
+
+- **To start the app**, double-click **`start-eliza.bat`** in the repository root.  
+  It runs **`run-eliza.ps1`**, which clears the **`.next`** cache, frees **port 3000** if needed, opens a dedicated terminal running **`npm run dev`**, and then opens **http://localhost:3000** in your default browser.
+
+You can also run the script directly: **`powershell -ExecutionPolicy Bypass -File .\run-eliza.ps1`**.
+
+---
+
 ## Installation
 
 ### 1. Ollama (local inference)
@@ -162,6 +173,7 @@ Load **`apps/extension/dist`** as an unpacked extension. Set **`VITE_ELIZA_API_U
 
 | Command | Description |
 |---------|-------------|
+| `start-eliza.bat` / `run-eliza.ps1` | Windows: clean **`.next`**, free port **3000**, **`npm run dev`** in a new window, open the app in the browser |
 | `npm run dev` | Next.js development server |
 | `npm run build` | Production build |
 | `npm run start` | Production server |
