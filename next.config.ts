@@ -1,12 +1,27 @@
 import type { NextConfig } from "next";
+import fs from "fs";
 import path from "path";
 
-/** Absolute app root (directory that contains this config and `package.json`). */
-const projectRoot = path.resolve(__dirname);
+/**
+ * Prefer `process.cwd()` when it is clearly this app (Next config + package.json there);
+ * otherwise use this file's directory so resolution stays correct if the shell cwd is a parent folder.
+ */
+function resolveProjectRoot(): string {
+  const cwd = path.resolve(process.cwd());
+  const hasPkg = fs.existsSync(path.join(cwd, "package.json"));
+  const hasThisConfig =
+    fs.existsSync(path.join(cwd, "next.config.ts")) ||
+    fs.existsSync(path.join(cwd, "next.config.mjs")) ||
+    fs.existsSync(path.join(cwd, "next.config.js"));
+  if (hasPkg && hasThisConfig) return cwd;
+  return path.resolve(__dirname);
+}
+
+const projectRoot = resolveProjectRoot();
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["tailwindcss", "@tailwindcss/postcss"],
   turbopack: {
-    /** Keep resolution anchored to this package; avoids hoisting confusion when a parent folder also has lockfiles. */
     root: projectRoot,
     resolveAlias: {
       tailwindcss: path.join(projectRoot, "node_modules", "tailwindcss"),
