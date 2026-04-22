@@ -65,7 +65,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $projectRoot "package.json"))) {
 # --- Dev server in a new persistent window ---
 # Use single-quoted -Command so inner double-quotes for Write-Host do not break parsing.
 Write-Host "Starting npm run dev in a new window..." -ForegroundColor Cyan
-$null = Start-Process -FilePath "powershell.exe" -WorkingDirectory $projectRoot -ArgumentList @(
+$null = Start-Process -FilePath "powershell.exe" -WorkingDirectory $projectRoot -WindowStyle Normal @(
   "-NoExit",
   "-NoProfile",
   "-ExecutionPolicy", "Bypass",

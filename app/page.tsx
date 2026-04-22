@@ -195,8 +195,8 @@ export default function DashboardPage() {
   const [targetLocation, setTargetLocation] = useState("");
   const [prefsLocationBusy, setPrefsLocationBusy] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
-  const canRunAnalysis =
-    status.loaded && jobText.trim().length > 0 && !loadingAnalysis && !loadingAssets;
+  /** Re-runs must not be blocked while application assets generate; `loadingAnalysis` is the only busy gate. */
+  const canRunAnalysis = status.loaded && jobText.trim().length > 0 && !loadingAnalysis;
 
   const loadOllamaModels = useCallback(async () => {
     setModelsRefreshing(true);
@@ -229,6 +229,10 @@ export default function DashboardPage() {
   useEffect(() => {
     void loadOllamaModels();
   }, [loadOllamaModels]);
+
+  useEffect(() => {
+    console.log("[UI] Model changed to:", selectedModel);
+  }, [selectedModel]);
 
   useEffect(() => {
     void checkCvStatus();
@@ -322,7 +326,23 @@ export default function DashboardPage() {
     }
   }
 
-  async function runAnalysis() {
+  const loadConstraints = useCallback(async () => {
+    setConstraintsBusy(true);
+    try {
+      const response = await fetch("/api/user-constraints");
+      const data = (await response.json()) as ConstraintsState;
+      setConstraints({
+        constraints: data.constraints ?? [],
+        updated_at: data.updated_at,
+      });
+    } catch {
+      setMessage("Could not load constraints.");
+    } finally {
+      setConstraintsBusy(false);
+    }
+  }, []);
+
+  const runAnalysis = useCallback(async () => {
     if (!status.loaded) {
       setMessage("Please upload and parse a CV before running analysis.");
       return;
@@ -368,7 +388,14 @@ export default function DashboardPage() {
       clearInterval(stepInterval);
       setLoadingAnalysis(false);
     }
-  }
+  }, [
+    selectedModel,
+    jobText,
+    refineText,
+    targetLocation,
+    status.loaded,
+    loadConstraints,
+  ]);
 
   async function generateApplicationBundle() {
     if (!result || result.fit_score <= 0) {
@@ -432,22 +459,6 @@ export default function DashboardPage() {
       setMessage("Constraint saved.");
     } catch {
       setMessage("Could not save constraint.");
-    }
-  }
-
-  async function loadConstraints() {
-    setConstraintsBusy(true);
-    try {
-      const response = await fetch("/api/user-constraints");
-      const data = (await response.json()) as ConstraintsState;
-      setConstraints({
-        constraints: data.constraints ?? [],
-        updated_at: data.updated_at,
-      });
-    } catch {
-      setMessage("Could not load constraints.");
-    } finally {
-      setConstraintsBusy(false);
     }
   }
 
@@ -616,13 +627,17 @@ export default function DashboardPage() {
               {modelsListWarning}
             </p>
           ) : null}
-          <button
-            type="button"
-            onClick={runAnalysis}
-            disabled={!canRunAnalysis}
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm hover:bg-emerald-500 disabled:bg-emerald-900"
-          >
-            {loadingAnalysis ? `Processing Step ${analysisStep}/3...` : "Run Analysis"}
+            <button
+              type="button"
+              onClick={() => {
+                void runAnalysis();
+              }}
+              disabled={!canRunAnalysis}
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm hover:bg-emerald-500 disabled:bg-emerald-900"
+            >
+            {loadingAnalysis
+              ? `Processing with ${selectedModel}... (step ${analysisStep}/3)`
+              : "Run Analysis"}
           </button>
           <p className="text-xs text-slate-400">
             Please upload a CV and paste a Job Description to start.

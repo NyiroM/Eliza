@@ -567,6 +567,7 @@ mathematical_breakdown — REQUIRED 7 lines, EXACT prefixes in order:
 metadata_fit_badge: "Location Conflict"|"Preference Match"|null
 JSON only.`;
 
+  console.log("[Backend] Sending prompt to Ollama... (semantic fit scoring)");
   const llm = await generateJsonWithOllama<Record<string, unknown>>(
     prompt,
     fallbackPayload,
@@ -605,6 +606,11 @@ export async function runPipelineDetailed(
     undefined,
     storedCv.raw_text ?? "",
   );
+  const isEnglish = jobParsed.translation_skipped === true;
+  console.log(
+    `[Backend] Language detection result: ${isEnglish ? "English" : "Translating..."}`,
+  );
+
   const combinedJobText = `${jobParsed.english_job_text}\n\n${input.job}`.slice(
     0,
     JOB_TEXT_LIMITS.combinedJobForScoring,

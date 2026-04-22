@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: modelCheck.error }, { status: 400 });
   }
   const model = modelCheck.model;
+  console.log(`[Backend] Starting analysis with model: ${model}`);
 
   const plocCheck = validatePreferredLocationField(body.preferred_location);
   if (!plocCheck.ok) {
@@ -65,6 +66,9 @@ export async function POST(request: NextRequest) {
       model,
       ...(preferred_location !== undefined ? { preferred_location } : {}),
     });
+    console.log(
+      `[Backend] Pipeline completed. fit_score=${resultData.result.fit_score} analysis_model=${resultData.result.analysis_model}`,
+    );
   } catch (error) {
     return NextResponse.json(
       {

@@ -35,6 +35,7 @@ export async function generateJsonWithOllama<T>(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    console.log(`[Backend] Sending prompt to Ollama... (model=${model})`);
     const response = await fetch(getOllamaGenerateUrl(), {
       method: "POST",
       headers: {
@@ -62,7 +63,12 @@ export async function generateJsonWithOllama<T>(
       return { data: fallback, source: "fallback" };
     }
 
-    return { data: JSON.parse(data.response) as T, source: "llm" };
+    const rawResponse = data.response;
+    console.log(
+      `[Backend] Raw response received (first 100 chars): ${rawResponse.slice(0, 100)}`,
+    );
+
+    return { data: JSON.parse(rawResponse) as T, source: "llm" };
   } catch {
     return { data: fallback, source: "fallback" };
   } finally {
