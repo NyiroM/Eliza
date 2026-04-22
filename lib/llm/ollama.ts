@@ -1,3 +1,5 @@
+import { DEFAULT_OLLAMA_MODEL, OLLAMA_TIMEOUT_MS } from "../../config/constants";
+
 type OllamaGenerateResponse = {
   response?: unknown;
 };
@@ -28,8 +30,8 @@ export async function generateJsonWithOllama<T>(
   options?: GenerateJsonOptions,
 ): Promise<OllamaJsonResult<T>> {
   const controller = new AbortController();
-  const timeoutMs = options?.timeoutMs ?? 15000;
-  const model = options?.model?.trim() || "llama3";
+  const timeoutMs = options?.timeoutMs ?? OLLAMA_TIMEOUT_MS.generateJsonDefault;
+  const model = options?.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {

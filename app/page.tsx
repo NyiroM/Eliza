@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import type { SemanticHighlight } from "@/types/pipeline";
 
 type UploadStatus = {
   loaded: boolean;
@@ -11,12 +12,6 @@ type UploadStatus = {
 type ConstraintsState = {
   constraints: string[];
   updated_at?: string;
-};
-
-type SemanticHighlight = {
-  phrase: string;
-  sentiment: "positive" | "negative";
-  reason: string;
 };
 
 type PipelineResult = {
@@ -555,7 +550,7 @@ export default function DashboardPage() {
                   type="text"
                   value={targetLocation}
                   onChange={(event) => setTargetLocation(event.target.value)}
-                  placeholder="e.g. Budapest, Hungary or Remote — EU"
+                  placeholder="e.g. Berlin, Germany or Remote — EU"
                   className="w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-sm"
                 />
                 <button
@@ -638,7 +633,7 @@ export default function DashboardPage() {
               type="text"
               value={refineText}
               onChange={(event) => setRefineText(event.target.value)}
-              placeholder='e.g. "I do not want PM roles", "I prefer remote work", "I want full-time only", or "I do not like working in Hungary"'
+              placeholder='e.g. "I do not want PM roles", "I prefer remote work", "I want full-time only", or "I need to avoid certain countries or cities"'
               className="w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-sm"
             />
             <button

@@ -11,14 +11,31 @@ import {
 import { loadStoredCvFromStorage } from "./storage/userCv";
 import { loadUserConstraintsFromStorage } from "./storage/userConstraints";
 import { loadUserPreferences } from "./storage/userPreferences";
+import {
+  CV_CONTEXT_LIMITS,
+  DEFAULT_OLLAMA_MODEL,
+  JOB_TEXT_LIMITS,
+  OLLAMA_TIMEOUT_MS,
+  SEMANTIC_HIGHLIGHT_LIMITS,
+  SEMANTIC_SCORER_PROMPT_LIMITS,
+} from "../config/constants";
+import type {
+  PipelineContext,
+  PipelineDetailedResult,
+  PipelineInput,
+  PipelineOutput,
+  ScoreComponents,
+  SemanticHighlight,
+} from "../types/pipeline";
 
-type ScoreComponents = {
-  base_semantic: number;
-  skill_overlap_delta: number;
-  experience_delta: number;
-  constraint_delta: number;
-  advantage_bonus: number;
-};
+export type {
+  PipelineContext,
+  PipelineDetailedResult,
+  PipelineInput,
+  PipelineOutput,
+  ScoreComponents,
+  SemanticHighlight,
+} from "../types/pipeline";
 
 function parseScoreComponents(raw: unknown): ScoreComponents | null {
   if (!raw || typeof raw !== "object") return null;
@@ -97,77 +114,6 @@ function buildBreakdownFromScoreComponents(
 7) Final Score: ${finalPct}%`;
 }
 
-export type SemanticHighlight = {
-  phrase: string;
-  sentiment: "positive" | "negative";
-  reason: string;
-};
-
-export type PipelineInput = {
-  job: string;
-  /** Ollama model tag used for all LLM stages in this run. */
-  model?: string;
-  /**
-   * If set (including ""), used for this run: non-empty = preferred place; empty = open to any location.
-   * If omitted (undefined), falls back to saved dashboard preference from storage.
-   */
-  preferred_location?: string | null;
-};
-
-export type PipelineOutput = {
-  fit_score: number;
-  matched_skills: string[];
-  missing_skills: string[];
-  strength_highlights: string[];
-  seniority_match: boolean;
-  summary: string;
-  /** Model name used for this analysis (from client or default). */
-  analysis_model: string;
-  extracted_entities: {
-    required_skills: string[];
-    optional_skills: string[];
-    experience_years: number | null;
-    education: string | null;
-    job_location: string | null;
-    work_model: string;
-    job_type: string;
-    benefits: string[];
-    commitments: string[];
-    metadata_constraint_notes: string[];
-  };
-  /** Badge from location / work-model / job-type fit vs constraints, or benefits match. */
-  metadata_fit_badge: "Location Conflict" | "Preference Match" | null;
-  /** Hard veto: score forced to 0% by constraint violation. */
-  constraint_veto: boolean;
-  /** LLM step-by-step score math (required when semantic scoring runs). */
-  mathematical_breakdown: string;
-  /** Hiring-post vagueness / risk signals from vibe scan (non-blocking). */
-  vibe_warnings: string[];
-  /** Job-text phrases that most influenced the score (for UI highlighter). */
-  semantic_highlights: SemanticHighlight[];
-  debug: {
-    analysis_source: "llm" | "fallback";
-    cv_parser_source: "llm" | "fallback";
-    job_parser_source: "llm" | "fallback";
-    constraints_source: "llm" | "fallback";
-    /** True when fit_score was aligned to the sum of structured score_components. */
-    fit_score_reconciled_from_components: boolean;
-  };
-};
-
-export type PipelineContext = {
-  cv_text: string;
-  core_stories: string[];
-  required_skills: string[];
-  /** English job text used for extraction and generation. */
-  job_text_english: string;
-};
-
-export type PipelineDetailedResult = {
-  result: PipelineOutput;
-  context: PipelineContext;
-};
-
 function tokenize(text: string): Set<string> {
   return new Set(
     text
@@ -240,8 +186,11 @@ function extractCvExperienceSnippets(raw: string, maxChars: number): string {
   const noise =
     /(@|linkedin\.com|github\.com|mailto:|tel:|^\+?[\d\s\-–]{10,}$|^\(?\+?\d|www\.)/i;
   const out: string[] = [];
+  const lineMin = CV_CONTEXT_LIMITS.experienceSnippetLinesMin;
+  const lineMax = CV_CONTEXT_LIMITS.experienceLineMaxChars + 20;
+  const sliceCap = CV_CONTEXT_LIMITS.experienceLineMaxChars;
   for (const line of lines) {
-    if (line.length < 6 || line.length > 220) continue;
+    if (line.length < lineMin || line.length > lineMax) continue;
     if (noise.test(line)) continue;
     if (/^(phone|email|e-mail|address|cv|resume|curriculum vitae)\b/i.test(line)) continue;
     const looksRelevant =
@@ -249,23 +198,25 @@ function extractCvExperienceSnippets(raw: string, maxChars: number): string {
       /\b(20\d{2}|present|current|engineer|developer|manager|lead|consultant|analyst|director)\b/i.test(
         line,
       );
-    if (looksRelevant || out.length < 6) out.push(line.slice(0, 200));
+    if (looksRelevant || out.length < lineMin) out.push(line.slice(0, sliceCap));
     if (out.join("\n").length >= maxChars) break;
   }
   return out.join("\n").slice(0, maxChars);
 }
 
 function buildPrunedCvContext(raw: string, parsed: CvParseResult): string {
-  const skillPart = parsed.skills.slice(0, 45).join(", ");
-  const storyPart = (parsed.core_stories ?? []).slice(0, 8).join(" | ");
-  const exp = extractCvExperienceSnippets(raw, 2400);
+  const skillPart = parsed.skills.slice(0, CV_CONTEXT_LIMITS.prunedSkillsMax).join(", ");
+  const storyPart = (parsed.core_stories ?? [])
+    .slice(0, CV_CONTEXT_LIMITS.coreStoriesMax)
+    .join(" | ");
+  const exp = extractCvExperienceSnippets(raw, CV_CONTEXT_LIMITS.experienceSnippetsMaxChars);
   const chunks = [
     `skills: ${skillPart}`,
     `seniority: ${parsed.seniority_level}`,
     storyPart ? `core_stories: ${storyPart}` : "",
     exp ? `experience_lines:\n${exp}` : "",
   ].filter(Boolean);
-  return chunks.join("\n").slice(0, 4000);
+  return chunks.join("\n").slice(0, CV_CONTEXT_LIMITS.prunedBlockMaxChars);
 }
 
 type SemanticFitReview = {
@@ -308,13 +259,13 @@ function parseSemanticHighlights(raw: unknown): SemanticHighlight[] {
     const sent = r.sentiment === "positive" || r.sentiment === "negative" ? r.sentiment : null;
     if (!phrase || phrase.length < 2 || !sent || !reason) continue;
     out.push({
-      phrase: phrase.slice(0, 500),
+      phrase: phrase.slice(0, SEMANTIC_HIGHLIGHT_LIMITS.phraseMaxChars),
       sentiment: sent,
-      reason: reason.slice(0, 400),
+      reason: reason.slice(0, SEMANTIC_HIGHLIGHT_LIMITS.reasonMaxChars),
     });
-    if (out.length >= 6) break;
+    if (out.length >= SEMANTIC_HIGHLIGHT_LIMITS.parseScanMax) break;
   }
-  return out.slice(0, 5);
+  return out.slice(0, SEMANTIC_HIGHLIGHT_LIMITS.returnMax);
 }
 
 function inferFallbackConstraintVeto(
@@ -327,15 +278,18 @@ function inferFallbackConstraintVeto(
   const loc = (jobLocation ?? "").toLowerCase();
   const job = jobTextEnglish.toLowerCase();
   const blob = `${loc} ${job}`;
-  const hatesHungary =
-    /(?:don'?t|do not|hate|never|avoid|not)\s+(?:like\s+)?(?:working|work|to\s+work).{0,50}hungary|hate.{0,30}hungary|no\s+hungary|nem.{0,40}magyarorsz/i.test(
+  const constraintsExcludeThisRegion =
+    /(?:don'?t|do not|hate|never|avoid|not)\s+(?:like\s+)?(?:working|work|to\s+work).{0,50}hungary|hate.{0,30}hungary|no\s+hungary/i.test(
       joined,
     );
-  if (hatesHungary && /\bhungary\b|budapest|debrecen|szeged|miskolc|magyarorsz/i.test(blob)) {
+  if (
+    constraintsExcludeThisRegion &&
+    /\bhungary\b|budapest|debrecen|szeged|miskolc\b/i.test(blob)
+  ) {
     return {
       vetoed: true,
       veto_reason:
-        "Veto: saved constraints conflict with a Hungary-based role (offline check while semantic scoring is unavailable).",
+        "Veto: saved constraints rule out this region, but the role is located there (offline check while semantic scoring is unavailable).",
     };
   }
   return { vetoed: false, veto_reason: null };
@@ -582,7 +536,7 @@ score_components (REQUIRED when vetoed=false): {base_semantic:int, skill_overlap
 
 semantic_highlights: 3-5 of {phrase,sentiment:"positive"|"negative",reason}. phrase = exact copy from JOB_TEXT below (short). Pick phrases that moved score most.
 
-VETO: vetoed=true only hard constraint clash (e.g. user bans Hungary + job Hungary). fit_score=0, score_components all 0, veto_reason 1 EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
+VETO: vetoed=true only hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason 1 EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
 
 PREF_LOC_JSON: ${preferredLocJson} — non-empty: soft +2..+12 if align; empty: neutral unless constraints ban region.
 Optional skills: bonus only, never penalty.
@@ -594,12 +548,12 @@ JOB_METADATA${metaNote}: ${JSON.stringify(params.jobBoardMetadata)}
 CONSTRAINTS: ${JSON.stringify(params.constraints)} HINTS: ${JSON.stringify(params.constraintHints)}
 CV_SKILLS: ${JSON.stringify(params.cvSkills)} CV_STORIES: ${JSON.stringify(params.coreStories.slice(0, 6))}
 CV_PRUNED:
-${params.cvSnippet.slice(0, 3500)}
+${params.cvSnippet.slice(0, SEMANTIC_SCORER_PROMPT_LIMITS.cvSnippetChars)}
 BASELINE m/m: ${JSON.stringify(params.baseline.matched_skills)}/${JSON.stringify(params.baseline.missing_skills)} sen_lit:${params.baseline.seniority_match}
 JOB_TEXT:
-${params.jobTextEnglish.slice(0, 7000)}
+${params.jobTextEnglish.slice(0, SEMANTIC_SCORER_PROMPT_LIMITS.jobTextChars)}
 JOB_MIX:
-${params.combinedJobText.slice(0, 3500)}
+${params.combinedJobText.slice(0, SEMANTIC_SCORER_PROMPT_LIMITS.jobMixChars)}
 
 mathematical_breakdown — REQUIRED 7 lines, EXACT prefixes in order:
 1) Base Skill Match Score (required-only semantic overlap): <n>
@@ -616,7 +570,7 @@ JSON only.`;
   const llm = await generateJsonWithOllama<Record<string, unknown>>(
     prompt,
     fallbackPayload,
-    { model: params.model, timeoutMs: 120_000 },
+    { model: params.model, timeoutMs: OLLAMA_TIMEOUT_MS.semanticPipelineScore },
   );
 
   const review = parseSemanticFitReviewPayload(llm.data, params.baseline, offlineVeto);
@@ -627,7 +581,7 @@ JSON only.`;
 export async function runPipelineDetailed(
   input: PipelineInput,
 ): Promise<PipelineDetailedResult> {
-  const model = input.model?.trim() || "llama3";
+  const model = input.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const storedCv = await loadStoredCvFromStorage();
   if (!storedCv) {
     throw new Error("No stored CV found. Upload CV first.");
@@ -651,7 +605,10 @@ export async function runPipelineDetailed(
     undefined,
     storedCv.raw_text ?? "",
   );
-  const combinedJobText = `${jobParsed.english_job_text}\n\n${input.job}`.slice(0, 20000);
+  const combinedJobText = `${jobParsed.english_job_text}\n\n${input.job}`.slice(
+    0,
+    JOB_TEXT_LIMITS.combinedJobForScoring,
+  );
   const cvParsed = storedCv.parsed;
   const userExperienceOverride = extractExperienceOverrideFromConstraints(constraints);
   const prunedCv = buildPrunedCvContext(storedCv.raw_text ?? "", cvParsed);
@@ -663,7 +620,7 @@ export async function runPipelineDetailed(
     prunedCv,
   ]
     .join(" ")
-    .slice(0, 8000);
+    .slice(0, CV_CONTEXT_LIMITS.userProfileJoinMax);
 
   const score = calculateFitScore(
     cvParsed.skills,

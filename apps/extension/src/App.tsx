@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { SemanticHighlight } from "../../../types/pipeline";
 
 const envApi = import.meta.env.VITE_ELIZA_API_URL;
 const API_BASE =
   typeof envApi === "string" && envApi.trim().length > 0
     ? envApi.trim().replace(/\/+$/, "")
     : "http://localhost:3000";
-
-type SemanticHighlight = {
-  phrase: string;
-  sentiment: "positive" | "negative";
-  reason: string;
-};
 
 type PipelineResponse = {
   fit_score: number;

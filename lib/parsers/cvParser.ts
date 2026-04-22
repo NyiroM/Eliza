@@ -1,12 +1,8 @@
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
 import PDFParser from "pdf2json";
+import type { CvParseResult } from "../../types/cv";
 
-export type CvParseResult = {
-  skills: string[];
-  seniority_level: "junior" | "mid" | "senior" | "lead" | "unknown";
-  core_stories: string[];
-  parser_source: ParserSource;
-};
+export type { CvParseResult } from "../../types/cv";
 
 // Central skill dictionary used by all parsers.
 // Keep this list explicit and easy to update.

@@ -1,13 +1,19 @@
-/** Maximum job description length (characters) accepted by the API. */
-export const JOB_DESCRIPTION_MAX_CHARS = 100_000;
+import {
+  CV_PDF_MAX_BYTES,
+  JOB_DESCRIPTION_MAX_CHARS,
+  JOB_DESCRIPTION_MIN_CHARS,
+  OLLAMA_MODEL_MAX_LEN,
+  PREFERRED_LOCATION_MAX_CHARS,
+} from "../config/constants";
 
-/** Minimum non-whitespace length for a meaningful job posting. */
-export const JOB_DESCRIPTION_MIN_CHARS = 20;
+export {
+  CV_PDF_MAX_BYTES,
+  JOB_DESCRIPTION_MAX_CHARS,
+  JOB_DESCRIPTION_MIN_CHARS,
+  OLLAMA_MODEL_MAX_LEN,
+  PREFERRED_LOCATION_MAX_CHARS,
+};
 
-/** Maximum PDF upload size (bytes). */
-export const CV_PDF_MAX_BYTES = 12 * 1024 * 1024;
-
-const OLLAMA_MODEL_MAX_LEN = 128;
 const OLLAMA_MODEL_PATTERN = /^[a-zA-Z0-9._:-]+$/;
 
 export function validateJobDescription(raw: string): { ok: true; job: string } | { ok: false; error: string } {
@@ -43,9 +49,6 @@ export function validateOllamaModelTag(raw: string): { ok: true; model: string }
   }
   return { ok: true, model };
 }
-
-/** Max length for saved or request `preferred_location` (pipeline + preferences API). */
-export const PREFERRED_LOCATION_MAX_CHARS = 500;
 
 /**
  * Validates optional `preferred_location` on POST /api/pipeline.

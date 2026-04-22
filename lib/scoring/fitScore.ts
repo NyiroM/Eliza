@@ -1,14 +1,6 @@
-export type FitScoreResult = {
-  fit_score: number;
-  matched_skills: string[];
-  missing_skills: string[];
-  seniority_match: boolean;
-};
+import type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
 
-export type JobScoringEntities = {
-  experience_years: number | null;
-  education: string | null;
-};
+export type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
 
 type SeniorityLevel = "junior" | "mid" | "senior" | "lead" | "unknown";
 
@@ -22,7 +14,7 @@ const SENIORITY_RANK: Record<SeniorityLevel, number> = {
 
 /** Max "X years" style number found in free text (CV blob). */
 function extractMaxYearsFromProfile(profileLower: string): number | null {
-  const re = /(\d+)\+?\s*(?:years?|yrs?|év|éves)/gi;
+  const re = /(\d+)\+?\s*(?:years?|yrs?)/gi;
   let best = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(profileLower)) !== null) {
@@ -37,7 +29,7 @@ export function extractExperienceOverrideFromConstraints(
 ): number | null {
   for (const constraint of constraints) {
     const lowered = constraint.toLowerCase();
-    const match = lowered.match(/(\d+)\+?\s*(?:years?|yrs?|év|éves)/i);
+    const match = lowered.match(/(\d+)\+?\s*(?:years?|yrs?)/i);
     if (!match) {
       continue;
     }
@@ -45,8 +37,7 @@ export function extractExperienceOverrideFromConstraints(
       lowered.includes("i have") ||
       lowered.includes("i actually have") ||
       lowered.includes("my experience") ||
-      lowered.includes("experience is") ||
-      lowered.includes("tapasztalat")
+      lowered.includes("experience is")
     ) {
       const years = Number.parseInt(match[1], 10);
       if (!Number.isNaN(years) && years >= 0 && years <= 60) {
@@ -76,9 +67,7 @@ function hasNoPmConstraint(constraints: string[]): boolean {
       t.includes("don't want pm") ||
       t.includes("do not want pm") ||
       t.includes("no project manager") ||
-      t.includes("i dont want pm") ||
-      t.includes("nem szeretnék pm") ||
-      t.includes("nem akarok pm")
+      t.includes("i dont want pm")
     );
   });
 }
@@ -102,11 +91,11 @@ export function collectConstraintSignalHints(constraints: string[], jobText: str
       t.includes("don't like dogs") ||
       t.includes("do not like dogs") ||
       t.includes("no dogs") ||
-      t.includes("nem szeretem a kutyákat") ||
-      t.includes("nem szeretem a kutyakat")
+      t.includes("allergic to dogs") ||
+      t.includes("not a dog person")
     );
   });
-  const isDogFriendlyRole = /dog[-\s]?friendly|kutyabarát|kutyabarat/i.test(jobText);
+  const isDogFriendlyRole = /dog[-\s]?friendly|pets?\s+(?:welcome|allowed)|bring your dog/i.test(jobText);
   if (hasDogDislikeConstraint && isDogFriendlyRole) {
     hints.push(
       "User dislikes dog-friendly workplaces; job mentions a dog-friendly environment.",
@@ -140,13 +129,10 @@ export function validateExperienceRequirement(
   const text = jobText.toLowerCase();
   const companyContext = [
     "years on the market",
-    "we have",
+    "we have been in business",
     "our company",
-    "founded",
-    "piacon",
-    "rendelkezünk",
-    "éve a piacon",
-    "cégünk",
+    "founded in",
+    "established in",
   ];
   const requirementContext = [
     "required",
@@ -154,12 +140,10 @@ export function validateExperienceRequirement(
     "at least",
     "must have",
     "experience required",
-    "elvárás",
-    "követelmény",
-    "legalább",
+    "years of experience",
   ];
 
-  const nearExperienceWords = /(\d+)\+?\s*(years?|év|éves)/i.test(text);
+  const nearExperienceWords = /(\d+)\+?\s*(?:years?|yrs?)/i.test(text);
   const hasCompanySignal = companyContext.some((s) => text.includes(s));
   const hasRequirementSignal = requirementContext.some((s) => text.includes(s));
 

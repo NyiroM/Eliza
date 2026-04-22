@@ -1,59 +1,50 @@
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
+import {
+  DEFAULT_OLLAMA_MODEL,
+  ENGLISH_DETECTION_GERMAN_PROBE_MAX_CHARS,
+  ENGLISH_DETECTION_JOB_LEXEME_WEIGHT,
+  ENGLISH_DETECTION_MIN_SCORE_SKIP_TRANSLATION,
+  ENGLISH_DETECTION_PHRASE_BONUS_WEIGHT,
+  ENGLISH_DETECTION_SAMPLE_MAX_CHARS,
+  JOB_TEXT_LIMITS,
+  OLLAMA_TIMEOUT_MS,
+} from "../../config/constants";
+import type { JobParseResult, JobTypeCategory, WorkModel } from "../../types/job";
 
-export type WorkModel = "on-site" | "hybrid" | "remote" | "unknown";
+export type { JobParseResult, JobTypeCategory, WorkModel } from "../../types/job";
 
-export type JobTypeCategory =
-  | "full-time"
-  | "part-time"
-  | "contract"
-  | "temporary"
-  | "volunteer"
-  | "internship"
-  | "unknown";
+/**
+ * English-first heuristic (no LLM). High-confidence English ⇒ caller may skip translation;
+ * anything ambiguous or clearly non-English ⇒ run automatic translation prep.
+ */
+const ENGLISH_FUNCTION_TOKEN_RE =
+  /\b(?:the|a|an|and|or|but|nor|not|only|just|if|then|else|when|while|until|since|because|although|though|unless|whether|with|without|within|from|into|onto|upon|about|above|below|between|among|through|during|before|after|against|across|toward|towards|beyond|outside|inside|near|off|over|under|again|further|once|here|there|where|why|how|what|which|who|whom|whose|this|that|these|those|any|some|all|both|each|every|few|more|most|other|such|same|than|too|very|also|can|could|may|might|must|shall|will|would|should|ought|need|have|has|had|having|be|am|is|are|was|were|been|being|do|does|did|doing|done|get|got|getting|make|made|take|took|come|came|go|went|use|used|using|say|said|tell|told|ask|asked|work|works|working|worked|find|found|give|gave|show|shown|think|thought|know|knew|see|saw|want|wanted|try|tried|call|called|seem|seemed|leave|left|put|mean|means|meant|keep|kept|let|begin|began|begun|run|ran|running|move|moved|live|lived|believe|believed|bring|brought|happen|happened|write|wrote|provide|provided|sit|sat|stand|stood|lose|lost|pay|paid|meet|met|include|included|continue|continued|set|learn|learned|change|changed|lead|led|understand|understood|watch|watched|follow|followed|stop|stopped|create|created|speak|spoke|spoken|read|allow|allowed|add|added|spend|spent|grow|grew|grown|open|opened|walk|walked|win|won|offer|offered|remember|remembered|love|loved|consider|considered|appear|appeared|buy|bought|wait|waited|die|died|send|sent|expect|expected|build|built|stay|stayed|fall|fell|fallen|cut|reach|reached|remain|remained|suggest|suggested|raise|raised|pass|passed|sell|sold|require|required|report|reported|decide|decided|pull|pulled)\b/gi;
 
-export type JobParseResult = {
-  required_skills: string[];
-  optional_skills: string[];
-  estimated_salary: string | null;
-  required_seniority: "junior" | "mid" | "senior" | "lead" | "unknown";
-  /** Minimum years of experience stated in the posting, if any. */
-  experience_years: number | null;
-  /** Required or preferred education level, free text. */
-  education: string | null;
-  /** City, region, and/or country when stated (English). */
-  job_location: string | null;
-  work_model: WorkModel;
-  job_type: JobTypeCategory;
-  /** Listed perks (insurance, retirement, leave, etc.). */
-  benefits: string[];
-  /** Cultural / values commitments (DEI, sustainability, work-life balance, etc.). */
-  commitments: string[];
-  /** LLM notes on how extracted metadata aligns or conflicts with user_constraints (if any were provided). */
-  metadata_constraint_notes: string[];
-  parser_source: ParserSource;
-  /** English text used for entity extraction (original or translated). */
-  english_job_text: string;
-  /** Heuristic skipped the translate LLM (job + CV detected English). */
-  translation_skipped?: boolean;
-};
+const ENGLISH_JOB_LEXEME_RE =
+  /\b(?:requirements?|responsibilities|qualifications|experience|education|degree|skills?|abilities|knowledge|position|role|job|title|location|salary|compensation|benefits?|equity|bonus|perks?|insurance|healthcare|remote|hybrid|on[-\s]?site|full[-\s]?time|part[-\s]?time|contract|temporary|permanent|internship|application|apply|candidates?|employees?|employer|team|department|manager|director|engineer|developer|analyst|consultant|specialist|years?|yearly|annual|minimum|maximum|preferred|nice[-\s]?to[-\s]?have|must[-\s]?have|summary|overview|description|posting|listing|opening|vacancy|duties|accountabilities|deliverables|stakeholders|reporting)\b/gi;
 
-/** Fast ASCII/heuristic check — no LLM. Used to skip translation when job + CV are already English. */
+const ENGLISH_STRONG_PHRASE_RE =
+  /\b(?:key\s+responsibilities|job\s+description|role\s+overview|years\s+of\s+experience|work\s+experience|how\s+to\s+apply|please\s+submit|cover\s+letter|equal\s+opportunity|about\s+the\s+role|about\s+the\s+position|what\s+you\s+will|what\s+you'?ll)\b/gi;
+
 export function isLikelyEnglishText(text: string): boolean {
-  const t = text.slice(0, 8000);
+  const t = text.slice(0, ENGLISH_DETECTION_SAMPLE_MAX_CHARS);
   if (!t.trim()) return true;
-  const letters = (t.match(/[a-zA-ZáéíóöőúüűÁÉÍÓÖŐÚÜŰ]/g) ?? []).length;
-  const huDiac = (t.match(/[áéíóöőúüűÁÉÍÓÖŐÚÜŰ]/g) ?? []).length;
-  if (letters > 50 && huDiac / letters > 0.035) return false;
-  const huHits = (
-    t.match(
-      /\b(munkakör|elvárások|előnyök|jelentkezz|álláslehetőség|követelmények|feladatok|pozíció|fizetés|munkarend|magyarorsz|budapesti)\b/gi,
-    ) ?? []
-  ).length;
-  if (huHits >= 2) return false;
-  if (/[äöüÄÖÜß]/.test(t.slice(0, 3000))) return false;
-  const ascii = (t.match(/[a-zA-Z]/g) ?? []).length;
-  if (ascii < 40) return true;
-  return ascii / Math.max(t.replace(/\s/g, "").length, 1) > 0.42;
+
+  if (/[äöüÄÖÜß]/.test(t.slice(0, ENGLISH_DETECTION_GERMAN_PROBE_MAX_CHARS))) {
+    return false;
+  }
+
+  const lang = t.toLowerCase();
+  const functionHits = (lang.match(ENGLISH_FUNCTION_TOKEN_RE) ?? []).length;
+  const jobLexemeHits = (lang.match(ENGLISH_JOB_LEXEME_RE) ?? []).length;
+  const phraseHits = (lang.match(ENGLISH_STRONG_PHRASE_RE) ?? []).length;
+
+  const score =
+    functionHits +
+    jobLexemeHits * ENGLISH_DETECTION_JOB_LEXEME_WEIGHT +
+    phraseHits * ENGLISH_DETECTION_PHRASE_BONUS_WEIGHT;
+
+  return score >= ENGLISH_DETECTION_MIN_SCORE_SKIP_TRANSLATION;
 }
 
 const REQUIRED_HINTS = [
@@ -62,11 +53,8 @@ const REQUIRED_HINTS = [
   "must-have",
   "requirements",
   "need to have",
-  "elvárás",
-  "követelmény",
-  "feltétel",
-  "profilod",
   "your profile",
+  "minimum qualifications",
 ];
 
 const OPTIONAL_HINTS = [
@@ -75,8 +63,7 @@ const OPTIONAL_HINTS = [
   "plus",
   "bonus",
   "good to have",
-  "előny",
-  "preferált",
+  "optional",
 ];
 
 const SKILL_KEYWORDS = [
@@ -136,12 +123,16 @@ export function cleanJobArtifacts(raw: string): string {
 
 /** Requirement-focused headers (exclude advantages-only sections). */
 const TRANSLATE_REQUIREMENT_HEADER_RE =
-  /^(#*\s*)?(requirements?|about the (role|position|company)|the role|role overview|key responsibilities|what you'?ll do|what you will do|your profile|must have|qualifications|skills we look for|elvárások|követelmények|feladatok|kompetenciák|profilod|munkakör|pozíció|role description)\b/i;
+  /^(#*\s*)?(requirements?|about the (role|position|company)|the role|role overview|key responsibilities|what you'?ll do|what you will do|your profile|must have|qualifications|skills we look for|role description|job description|position description)\b/i;
 
 /**
- * Before translation: cap length to reduce VRAM. Prefer "Requirements" / "About the role" / HU equivalents.
+ * Before translation: cap length to reduce VRAM. Prefer requirement-style sections
+ * ("Requirements", "About the role", and similar English section headers).
  */
-export function truncateJobForTranslation(cleanedJob: string, maxChars = 6000): string {
+export function truncateJobForTranslation(
+  cleanedJob: string,
+  maxChars = JOB_TEXT_LIMITS.truncateForTranslation,
+): string {
   const trimmed = cleanedJob.trim();
   if (trimmed.length <= maxChars) return trimmed;
 
@@ -189,7 +180,7 @@ function includesAny(text: string, hints: readonly string[]): boolean {
 
 function extractEstimatedSalaryFallback(jobText: string): string | null {
   const salaryPattern =
-    /((?:usd|eur|gbp|ft|huf|\$|€|£)\s?\d[\d,.\s]*(?:\s?-\s?(?:usd|eur|gbp|ft|huf|\$|€|£)?\s?\d[\d,.\s]*)?(?:\s?(?:per year|\/year|annual|yr|brutto|nettó))?)/i;
+    /((?:usd|eur|gbp|ft|huf|\$|€|£)\s?\d[\d,.\s]*(?:\s?-\s?(?:usd|eur|gbp|ft|huf|\$|€|£)?\s?\d[\d,.\s]*)?(?:\s?(?:per year|\/year|annual|yr|gross|net))?)/i;
   const match = jobText.match(salaryPattern);
   return match ? match[1].trim() : null;
 }
@@ -208,12 +199,8 @@ function extractExperienceYearsFallback(jobText: string): number | null {
     "need",
     "you have",
     "candidate",
-    "elvárás",
-    "követelmény",
-    "legalább",
-    "szükséges",
-    "elvárt",
-    "tapasztalat elvárás",
+    "experience required",
+    "years of experience",
   ];
   const companySignals = [
     "we have",
@@ -221,17 +208,14 @@ function extractExperienceYearsFallback(jobText: string): number | null {
     "we are",
     "founded",
     "on the market",
-    "piacon",
-    "rendelkezünk",
-    "cégünk",
-    "vállalatunk",
-    "működünk",
-    "éve a piacon",
+    "years on the market",
+    "since ",
+    "established in",
   ];
 
   const patterns = [
-    /(\d+)\+?\s*(?:years?|yrs?|év|éves)/gi,
-    /(?:minimum|min\.?|at least|legalább)\s*(\d+)\s*(?:years?|év)?/gi,
+    /(\d+)\+?\s*(?:years?|yrs?)/gi,
+    /(?:minimum|min\.?|at least)\s*(\d+)\s*(?:years?)?/gi,
   ];
 
   let best = 0;
@@ -248,7 +232,7 @@ function extractExperienceYearsFallback(jobText: string): number | null {
       const r = new RegExp(re.source, re.flags);
       while ((m = r.exec(line)) !== null) {
         const n = parseInt(m[1], 10);
-        if (!Number.isNaN(n) && (hasRequirementSignal || lowered.includes("experience") || lowered.includes("tapasztalat"))) {
+        if (!Number.isNaN(n) && (hasRequirementSignal || lowered.includes("experience"))) {
           best = Math.max(best, n);
         }
       }
@@ -267,10 +251,10 @@ function extractEducationFallback(jobText: string): string | null {
     "mba",
     "phd",
     "engineering degree",
-    "mérnök",
     "diploma",
-    "főiskola",
-    "egyetem",
+    "university",
+    "college degree",
+    "associate degree",
   ];
   for (const h of hints) {
     if (t.includes(h)) {
@@ -393,8 +377,8 @@ function extractLocationKeywordFallback(jobText: string): string | null {
   const patterns = [
     /(?:location|based in|office in|headquartered in|based at)\s*[:\-]\s*([^\n]+)/i,
     /(?:workplace|work\s+site|reporting to)\s*[:\-]\s*([^\n]+)/i,
-    /\b(?:in|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*(?:USA|UK|UAE|EU|Hungary|Germany|France|Poland|Romania))\b/,
-    /\b(?:Budapest|London|Berlin|Munich|Paris|Warsaw|Bucharest|Cluj|Amsterdam|Dublin|Singapore|Toronto|New York|San Francisco)\b[^.\n]{0,40}/i,
+    /\b(?:in|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*(?:USA|UK|UAE|EU|Ireland|Germany|France|Poland|Romania))\b/,
+    /\b(?:London|Berlin|Munich|Paris|Vienna|Warsaw|Bucharest|Cluj|Amsterdam|Dublin|Singapore|Toronto|New York|San Francisco)\b[^.\n]{0,40}/i,
   ];
   for (const re of patterns) {
     const m = jobText.match(re);
@@ -610,7 +594,7 @@ async function stageLanguageAndTranslate(
   cleanedText: string,
   ollamaModel: string,
 ): Promise<{ prep: LangPrepResult; source: ParserSource }> {
-  const maxLen = 14000;
+  const maxLen = JOB_TEXT_LIMITS.languagePrepInputMax;
   const slice = cleanedText.length > maxLen ? cleanedText.slice(0, maxLen) : cleanedText;
 
   const fallback: LangPrepResult = {
@@ -622,14 +606,14 @@ async function stageLanguageAndTranslate(
 
 - If mostly English: is_english true; job_text_for_extraction = input (trim boilerplate headers/footers only).
 - Else: is_english false; translate requirement-heavy parts to English (skills, qualifications, experience). Drop long marketing/company history unless it states hard requirements.
-- HU: company "25 years on market" ≠ candidate years; "X years experience required" = keep.
+- Non-English postings: company "25 years on market" ≠ candidate years; "X years experience required" = keep.
 - Keep bullets as newlines. JSON only.
 
 INPUT:
 ${slice}`;
 
   const llm = await generateJsonWithOllama<LangPrepResult>(prompt, fallback, {
-    timeoutMs: 45000,
+    timeoutMs: OLLAMA_TIMEOUT_MS.jobLanguagePrep,
     model: ollamaModel,
   });
   const data = llm.data;
@@ -655,7 +639,7 @@ async function stageEntityExtraction(
   userConstraints: string[],
 ): Promise<{ fields: JobParseFields; source: ParserSource }> {
   const fallbackFields = keywordFallback(jobTextForExtraction);
-  const maxLen = 16000;
+  const maxLen = JOB_TEXT_LIMITS.entityExtractionSlice;
   const slice =
     jobTextForExtraction.length > maxLen
       ? jobTextForExtraction.slice(0, maxLen)
@@ -674,11 +658,11 @@ All string outputs English. estimated_salary as in posting.
 
 SECTION TARGETING (critical):
 - IGNORE the first ~30% and last ~30% of the input BY CHARACTER COUNT unless those regions clearly contain bullet lists (lines starting with -, *, •, or numbered items) that list skills or requirements.
-- Focus on sections whose meaning aligns with: "Your profile", "Requirements", "Skills", "Qualifications", "What we look for", "Must have", "Nice to have", "Elvárások", "Követelmények", "Kompetenciák", "Profilod", "Feladatok" (only where they state hard skills).
+- Focus on sections whose meaning aligns with: "Your profile", "Requirements", "Skills", "Qualifications", "What we look for", "Must have", "Nice to have" (only where they state hard skills).
 
-Regional job-board layout (common on Hungarian and EU sites):
-- Sections titled "Előnyök", "Előny", "Nice to have", "Plus", or clearly labeled advantages: every skill or tool listed there MUST go into optional_skills ONLY. Never copy those items into required_skills. Missing an advantage section is never a hard gap.
-- Sections titled "Elvárások", "Követelmények", "Követelmény", "Must have", "Minimum requirements": those belong in required_skills when they name concrete tools/languages/platforms.
+Regional job-board layout (common globally):
+- Sections titled "Nice to have", "Plus", "Advantages", or clearly labeled optional advantages: every skill or tool listed there MUST go into optional_skills ONLY. Never copy those items into required_skills. Missing an advantage section is never a hard gap.
+- Sections titled "Minimum requirements", "Must have", "Requirements", "Qualifications": those belong in required_skills when they name concrete tools/languages/platforms.
 
 SKILLS (STRICT — hard requirements only):
 - required_skills: ONLY verifiable hard skills, tools, platforms, languages, certifications, and named methodologies (e.g. "Python", "SAP PM", "Agile", "English C1", "AWS", "Finite element analysis").
@@ -688,7 +672,7 @@ SKILLS (STRICT — hard requirements only):
 - You MUST extract at least 5-10 core hard skills/tools/technologies when the posting has substantial content.
 - If you find mentions of Engineering, Sales, MS Office, or specific industry tools, include those concrete hard skills in required_skills.
 - Never return an empty required_skills list when the description clearly contains requirement content.
-- experience_years: minimum years required for the candidate only. Ignore company age/history statements like "we have 25 years of experience" or "25 éve a piacon".
+- experience_years: minimum years required for the candidate only. Ignore company age/history statements like "we have 25 years of experience" or "25 years on the market".
 
 EDUCATION (strict — degrees, qualifications, institutions ONLY):
 - education must be ONE concise line naming a required minimum degree, qualification level, field of study, and/or institution ONLY if the posting states it as a hiring requirement; else null.
@@ -700,8 +684,8 @@ EDUCATION (strict — degrees, qualifications, institutions ONLY):
 - required_seniority: infer from level wording and years; unknown if unclear.
 
 LOCATION & WORK MODEL (BE AGGRESSIVE):
-- Scan the entire posting for cities, regions, countries, "based in", "office in", EMEA/APAC, etc. Populate job_location with the best single line (e.g. "Budapest, Hungary" or "Remote — US only"). If ANY recognizable place or region appears, you MUST set job_location — do not leave null when geography is stated inline.
-- If the text mentions a city like Budapest, you MUST put it in job_location. Do not leave location unspecified.
+- Scan the entire posting for cities, regions, countries, "based in", "office in", EMEA/APAC, etc. Populate job_location with the best single line (e.g. "London, UK" or "Remote — US only"). If ANY recognizable place or region appears, you MUST set job_location — do not leave null when geography is stated inline.
+- If the text mentions a recognizable city or region name, you MUST put it in job_location. Do not leave location unspecified.
 - work_model: Map explicit signals — "remote", "WFH", "work from home", "fully distributed" → remote; "hybrid", "2 days office" → hybrid; "on-site", "onsite", "in-office", "office-based", "in person" → on-site. If the text only implies office work without remote/hybrid wording, prefer on-site when an office location is given. Use "unknown" ONLY when there is truly no remote/hybrid/office signal at all.
 
 JOB TYPE (job-board style):
@@ -723,7 +707,7 @@ ${slice}`;
   const llm = await generateJsonWithOllama<EntityExtractionResult>(
     prompt,
     jobFieldsToEntityFallback(fallbackFields),
-    { timeoutMs: 90_000, model: ollamaModel },
+    { timeoutMs: OLLAMA_TIMEOUT_MS.jobEntityExtraction, model: ollamaModel },
   );
 
   return {
@@ -733,18 +717,21 @@ ${slice}`;
 }
 
 /**
- * Multi-stage job parse: clean artifacts → language/translate (skipped if job+CV English) → entity extraction.
+ * Multi-stage job parse: clean artifacts → English-first heuristic (skip LLM prep when job+CV are high-confidence English) → entity extraction.
  */
 export async function parseJobText(
   jobText: string,
-  ollamaModel = "llama3",
+  ollamaModel = DEFAULT_OLLAMA_MODEL,
   userConstraints: string[] = [],
   onStage?: (stage: "language_translate" | "entity_extraction") => void,
   cvPlainText?: string | null,
 ): Promise<JobParseResult> {
-  const model = ollamaModel.trim() || "llama3";
+  const model = ollamaModel.trim() || DEFAULT_OLLAMA_MODEL;
   const cleaned = cleanJobArtifacts(jobText);
-  const forTranslation = truncateJobForTranslation(cleaned, 6000);
+  const forTranslation = truncateJobForTranslation(
+    cleaned,
+    JOB_TEXT_LIMITS.truncateForTranslation,
+  );
   const cvSample = typeof cvPlainText === "string" ? cvPlainText : "";
   const jobEnglish = isLikelyEnglishText(forTranslation);
   const cvEnglish = !cvSample.trim() || isLikelyEnglishText(cvSample);
