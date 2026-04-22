@@ -1,0 +1,35 @@
+{
+  "name": "eliza",
+  "version": "0.2.0",
+  "private": true,
+  "description": "AI-powered career co-pilot for local job-fit analysis with Ollama, Next.js, and TypeScript",
+  "author": "NyiroM (https://github.com/NyiroM)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NyiroM/Eliza.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.2.4",
+    "pdf2json": "^4.0.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/chrome": "^0.1.40",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

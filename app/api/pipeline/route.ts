@@ -1,0 +1,77 @@
+import { NextRequest, NextResponse } from "next/server";
+import { runPipelineDetailed } from "../../../lib/pipeline";
+import { addUserConstraint } from "../../../lib/storage/userConstraints";
+import { validateJobDescription, validateOllamaModelTag } from "../../../lib/validation";
+
+type PipelineRequestBody = {
+  job?: unknown;
+  refine_feedback?: unknown;
+  model?: unknown;
+  preferred_location?: unknown;
+};
+
+export async function POST(request: NextRequest) {
+  let body: PipelineRequestBody;
+
+  try {
+    body = (await request.json()) as PipelineRequestBody;
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body." },
+      { status: 400 },
+    );
+  }
+
+  if (typeof body.job !== "string") {
+    return NextResponse.json(
+      {
+        error: 'Body must include string field: "job".',
+      },
+      { status: 400 },
+    );
+  }
+
+  const jobCheck = validateJobDescription(body.job);
+  if (!jobCheck.ok) {
+    return NextResponse.json({ error: jobCheck.error }, { status: 400 });
+  }
+
+  const rawModel =
+    typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : "llama3";
+  const modelCheck = validateOllamaModelTag(rawModel);
+  if (!modelCheck.ok) {
+    return NextResponse.json({ error: modelCheck.error }, { status: 400 });
+  }
+  const model = modelCheck.model;
+
+  const preferred_location: string | undefined =
+    typeof body.preferred_location === "string"
+      ? body.preferred_location
+      : body.preferred_location === null
+        ? ""
+        : undefined;
+
+  if (typeof body.refine_feedback === "string" && body.refine_feedback.trim()) {
+    await addUserConstraint(body.refine_feedback);
+  }
+
+  let resultData;
+  try {
+    resultData = await runPipelineDetailed({
+      job: jobCheck.job,
+      model,
+      ...(preferred_location !== undefined ? { preferred_location } : {}),
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Pipeline failed due to missing CV data.",
+      },
+      { status: 400 },
+    );
+  }
+  const { result } = resultData;
+
+  return NextResponse.json(result, { status: 200 });
+}

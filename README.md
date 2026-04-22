@@ -1,98 +1,89 @@
-# Eliza
-Eliza - AI Job Assistant
+# ELIZA
 
-ELIZA : Empathetic Link for Intelligent Job Acquire
+**ELIZA** is an AI-powered career co-pilot for **high-speed job-fit analysis**: paste a posting, compare it to your CV with transparent scoring math, optional semantic highlights, and generated application assets—all running **locally** via [Ollama](https://ollama.com).
 
-ELIZA is a specialized AI-driven workflow tool designed to increase job application success rates through data-driven personalization and ATS optimization. The project focuses on a deterministic pipeline that calculates job fit and generates tailored application bundles while keeping the user in full control of the process.
+## Vision
 
-ELIZA is a high-precision, AI-driven workflow assistant designed to eliminate the "spray-and-pray" approach to job hunting. Unlike mass-automation bots, ELIZA prioritizes application quality and human oversight through a deterministic, transparent pipeline.
+Help you decide **fit vs. pass** in seconds, with **auditable breakdowns** (not a black-box percentage), then optionally draft a cover letter and CV tweaks grounded in your real profile.
 
-## 📊 Project Status This project is actively managed using GitHub Projects. You can track our progress, milestones, and upcoming features on our [Public Roadmap/Kanban Board](https://github.com/users/NyiroM/projects/1)
+## Tech stack
 
-🎯 Core Mission
+| Layer | Choice |
+|--------|--------|
+| App | **Next.js** (App Router), **React**, **TypeScript** |
+| Styling | **Tailwind CSS** v4 |
+| Local AI | **Ollama** — tested with **Llama 3**, **DeepSeek-R1** 8B-class models, and similar JSON-capable tags |
+| PDF | **pdf2json** for CV text extraction |
+| Extension | **Vite** + **React** (Chrome MV3 side panel) |
 
-The system bridges the gap between candidates and Applicant Tracking Systems (ATS) by generating highly personalized, data-driven application materials. It is built to solve the industry-wide problem of low conversion rates caused by generic, non-optimized submissions.
+## Key features
 
-💡 Key Value Propositions
+- **Semantic highlighting** — key phrases from the posting, positive vs. negative, with hover rationale (when the scorer returns `semantic_highlights`).
+- **Fast analysis** — typical runs on a local GPU are on the order of **~15 seconds** for Turbo-English paths (heuristic English skip for translation where applicable); wall time depends on model size and hardware.
+- **Two-column pro dashboard** — input (CV status, target location, job text) beside output (fit gauge, match analysis, corporate vibe, constraints, requirement analysis, application bundle).
+- **Score transparency** — the model returns structured **`score_components`**; the API **reconciles** `fit_score` and lines **6–7** of the mathematical breakdown so the **arithmetic sum matches the headline percentage**.
 
-Fit-First Analysis: Instead of applying blindly, users receive an instant "Fit Score" (0–100%) and a gap analysis to decide if a role is worth their effort.
+## Repository layout
 
-Copilot UX Philosophy: ELIZA functions as an assistant, not a replacement. All AI-generated content remains fully visible and editable by the user.
+- `app/` — Next.js routes and dashboard UI  
+- `app/api/*` — JSON APIs (`pipeline`, `upload-cv`, `generate-assets`, preferences, constraints, Ollama model list)  
+- `lib/` — Pipeline, parsers, scoring, Ollama client, storage  
+- `apps/extension/` — Chrome extension source (`npm run build` writes `dist/`)
 
-Non-Negotiable Narratives: The system ensures that the candidate's unique "Core Stories" are consistently integrated into every tailored resume and cover letter.
+Local CV and preferences are stored under `storage/` (gitignored).
 
-ATS Mastery: Automated keyword integration and bullet point rewriting ensure that documents are optimized for both human recruiters and automated filters.
+## Prerequisites
 
-🛠 Technical Architecture
+- **Node.js** 20+ recommended  
+- **npm**  
+- **Ollama** installed and on your `PATH` (for `ollama list` from the Next server process)  
+- At least one **pullable model**, e.g.:
 
-Frontend: Next.js Web Application and a React-based Chrome Extension for real-time interaction.
+```bash
+ollama pull llama3
+# optional, good for JSON-style scoring:
+ollama pull deepseek-r1:8b
+```
 
-Backend: Node.js/Python API deployed in a serverless environment (Vercel/AWS).
+## Setup
 
-Intelligence: A dual-model strategy using cost-efficient LLMs (Ollama/Llama 3/Mistral) for parsing and high-reasoning models (GPT-4o/Sonnet) for final generation.
-
-Storage: PostgreSQL with pgvector for semantic matching and experience tracking.
-
-🚀 MVP Feature Set
-
-Dual-Parser Engine: Structured data extraction from both complex PDF resumes and varied job descriptions.
-
-Weighted Matching: A semantic scoring engine that evaluates skill overlap and seniority alignment.
-
-Application Bundle: One-click generation of a tailored Resume and a personalized Cover Letter.
-
-Browser Integration: Real-time scoring overlay on platforms like LinkedIn to provide immediate decision support.
-
-📂 Project Structure
-
-├── apps/
-│   ├── web/                # Next.js Dashboard & Landing Page
-│   └── extension/          # Chrome Extension (React + Tailwind)
-├── packages/
-│   ├── core/               # Shared logic: Parsing, Scoring, LLM Utils
-│   ├── database/           # Prisma/Drizzle schema & pgvector logic
-│   └── ui/                 # Shared UI components (shadcn/ui)
-└── docs/                   # Detailed technical documentation
-
-
-🏗 Setup & Installation (Local Development)
-
-Prerequisites
-
-Node.js (v20+)
-
-Docker (for PostgreSQL & Open WebUI)
-
-Ollama (for local LLM execution)
-
-Steps
-
-Clone the repository
-
-git clone [https://github.com/username/eliza.git](https://github.com/username/eliza.git)
-cd eliza
-
-
-Install dependencies
-
+```bash
+git clone https://github.com/NyiroM/Eliza.git
+cd Eliza
 npm install
-
-
-Configure Environment Variables
-Create a .env file in the root directory and add your configurations (refer to .env.example).
-
-Start local LLM
-
-ollama run llama3
-
-
-Run development server
-
+cp .env.example .env.local   # optional; see comments inside
 npm run dev
+```
 
+Open **http://localhost:3000**, upload a **PDF CV**, paste a **job description** (minimum length enforced by the API), choose an Ollama model, and run analysis.
 
-⚖️ License
+### Environment variables
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+See **`.env.example`**. The main variable is **`OLLAMA_HOST`** (default `http://localhost:11434`) so ELIZA can reach Ollama when it is not on localhost.
 
-"Don't apply blind. Apply smart."
+### Extension
+
+```bash
+cd apps/extension
+npm install
+npm run build
+```
+
+Load `apps/extension/dist` as an unpacked extension in Chrome. Set **`VITE_ELIZA_API_URL`** at build time if the Next app is not on `http://localhost:3000`.
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Next.js development server |
+| `npm run build` | Production build |
+| `npm run start` | Start production server |
+| `npm run lint` | ESLint |
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
