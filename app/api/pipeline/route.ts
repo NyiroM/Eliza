@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runPipelineDetailed } from "../../../lib/pipeline";
 import { addUserConstraint } from "../../../lib/storage/userConstraints";
-import { validateJobDescription, validateOllamaModelTag } from "../../../lib/validation";
+import {
+  validateJobDescription,
+  validateOllamaModelTag,
+  validatePreferredLocationField,
+} from "../../../lib/validation";
 
 type PipelineRequestBody = {
   job?: unknown;
@@ -44,12 +48,11 @@ export async function POST(request: NextRequest) {
   }
   const model = modelCheck.model;
 
-  const preferred_location: string | undefined =
-    typeof body.preferred_location === "string"
-      ? body.preferred_location
-      : body.preferred_location === null
-        ? ""
-        : undefined;
+  const plocCheck = validatePreferredLocationField(body.preferred_location);
+  if (!plocCheck.ok) {
+    return NextResponse.json({ error: plocCheck.error }, { status: 400 });
+  }
+  const preferred_location = plocCheck.preferred_location;
 
   if (typeof body.refine_feedback === "string" && body.refine_feedback.trim()) {
     await addUserConstraint(body.refine_feedback);

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { PREFERRED_LOCATION_MAX_CHARS } from "../validation";
 
 const STORAGE_DIR = path.join(process.cwd(), "storage");
 const PREFS_PATH = path.join(STORAGE_DIR, "user_preferences.json");
@@ -19,7 +20,7 @@ export async function loadUserPreferences(): Promise<UserPreferences> {
     return {
       preferred_location:
         typeof data.preferred_location === "string" && data.preferred_location.trim()
-          ? data.preferred_location.trim().slice(0, 200)
+          ? data.preferred_location.trim().slice(0, PREFERRED_LOCATION_MAX_CHARS)
           : null,
     };
   } catch {
@@ -32,7 +33,7 @@ export async function saveUserPreferences(prefs: UserPreferences): Promise<void>
   const payload: UserPreferences = {
     preferred_location:
       prefs.preferred_location && prefs.preferred_location.trim()
-        ? prefs.preferred_location.trim().slice(0, 200)
+        ? prefs.preferred_location.trim().slice(0, PREFERRED_LOCATION_MAX_CHARS)
         : null,
   };
   await writeFile(PREFS_PATH, JSON.stringify(payload, null, 2), "utf-8");

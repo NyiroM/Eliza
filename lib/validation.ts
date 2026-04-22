@@ -44,6 +44,57 @@ export function validateOllamaModelTag(raw: string): { ok: true; model: string }
   return { ok: true, model };
 }
 
+/** Max length for saved or request `preferred_location` (pipeline + preferences API). */
+export const PREFERRED_LOCATION_MAX_CHARS = 500;
+
+/**
+ * Validates optional `preferred_location` on POST /api/pipeline.
+ * Omitted → undefined (use saved preference). `null` or `""` → clear for this run.
+ */
+export function validatePreferredLocationField(
+  raw: unknown,
+):
+  | { ok: true; preferred_location: string | undefined }
+  | { ok: false; error: string } {
+  if (raw === undefined) {
+    return { ok: true, preferred_location: undefined };
+  }
+  if (raw === null) {
+    return { ok: true, preferred_location: "" };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: 'Field "preferred_location" must be a string, null, or omitted.' };
+  }
+  const t = raw.trim();
+  if (t.length > PREFERRED_LOCATION_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `preferred_location must be at most ${PREFERRED_LOCATION_MAX_CHARS} characters.`,
+    };
+  }
+  return { ok: true, preferred_location: t };
+}
+
+/** For POST /api/user-preferences: `null` clears; non-empty string must fit max length. */
+export function validatePreferredLocationForStorage(
+  raw: unknown,
+): { ok: true; preferred_location: string | null } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) {
+    return { ok: true, preferred_location: null };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: 'Field "preferred_location" must be a string or null.' };
+  }
+  const t = raw.trim();
+  if (t.length > PREFERRED_LOCATION_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `preferred_location must be at most ${PREFERRED_LOCATION_MAX_CHARS} characters.`,
+    };
+  }
+  return { ok: true, preferred_location: t.length > 0 ? t : null };
+}
+
 export function validateCvPdfUpload(file: File, bufferByteLength: number): { ok: true } | { ok: false; error: string } {
   if (file.type !== "application/pdf") {
     return { ok: false, error: "Only PDF files are supported for CV upload." };

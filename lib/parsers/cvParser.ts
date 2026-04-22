@@ -215,18 +215,3 @@ export async function parseCvPdfBuffer(pdfBuffer: Buffer): Promise<string> {
     parser.parseBuffer(pdfBuffer);
   });
 }
-
-/*
-Example:
-const cv = "Built Next.js and Node.js APIs with TypeScript, Docker, and AWS.";
-parseCvText(cv)
-=> {
-  skills: ["aws", "docker", "next.js", "node", "typescript"],
-  seniority_level: "mid",
-  core_stories: [
-    "Reduced API latency by 35% by optimizing Node.js endpoints.",
-    "Increased deployment frequency 2x using CI/CD automation.",
-    "Cut cloud cost by 20% through AWS rightsizing."
-  ]
-}
-*/
