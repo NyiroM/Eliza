@@ -1,4 +1,6 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { assertOllamaModelInstalled, OllamaRequestError } from "../../../lib/llm/ollama";
 import { runPipelineDetailed } from "../../../lib/pipeline";
 import { addUserConstraint } from "../../../lib/storage/userConstraints";
 import {
@@ -10,6 +12,9 @@ import {
 /** Never statically cache this route; each POST must execute the full pipeline. */
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+/** Allow long local Ollama runs (matches `OLLAMA_TIMEOUT` in lib/llm/ollama.ts). No separate route-level abort. */
+export const maxDuration = 300;
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0",
@@ -27,6 +32,7 @@ type PipelineRequestBody = {
 };
 
 export async function POST(request: NextRequest) {
+  const requestId = randomUUID();
   let body: PipelineRequestBody;
 
   try {
@@ -56,7 +62,20 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({ error: modelCheck.error }, 400);
   }
   const model = modelCheck.model;
-  console.log(`[Backend] Starting analysis with model: ${model}`);
+  console.log(`[Backend] pipeline ${requestId} start model=${model}`);
+
+  try {
+    await assertOllamaModelInstalled(model);
+  } catch (err) {
+    const message =
+      err instanceof OllamaRequestError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Ollama model check failed.";
+    console.error(`[Backend] pipeline ${requestId} model check failed:`, message);
+    return jsonNoStore({ error: message, request_id: requestId }, 500);
+  }
 
   const plocCheck = validatePreferredLocationField(body.preferred_location);
   if (!plocCheck.ok) {
@@ -76,16 +95,13 @@ export async function POST(request: NextRequest) {
       ...(preferred_location !== undefined ? { preferred_location } : {}),
     });
     console.log(
-      `[Backend] Pipeline completed. fit_score=${resultData.result.fit_score} analysis_model=${resultData.result.analysis_model}`,
+      `[Backend] pipeline ${requestId} done fit_score=${resultData.result.fit_score} analysis_model=${resultData.result.analysis_model}`,
     );
   } catch (error) {
-    return jsonNoStore(
-      {
-        error:
-          error instanceof Error ? error.message : "Pipeline failed due to missing CV data.",
-      },
-      400,
-    );
+    const message =
+      error instanceof Error ? error.message : "Pipeline failed due to an unexpected error.";
+    console.error(`[Backend] pipeline ${requestId} failed (500):`, message);
+    return jsonNoStore({ error: message, request_id: requestId }, 500);
   }
   const { result } = resultData;
 

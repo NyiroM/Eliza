@@ -168,7 +168,7 @@ ${cvText}
 
   const llmResult = await generateJsonWithOllama<unknown>(prompt, fallback, {
     model,
-    timeoutMs: 60_000,
+    role: "extract_cv",
   });
   const parsed = sanitizeCvResult(llmResult.data, fallback);
 

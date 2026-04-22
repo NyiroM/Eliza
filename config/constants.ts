@@ -6,13 +6,7 @@
 /** Default Ollama model tag when none is provided or discovery fails. */
 export const DEFAULT_OLLAMA_MODEL = "llama3";
 
-/** HTTP timeouts for Ollama `api/generate` (milliseconds). */
-export const OLLAMA_TIMEOUT_MS = {
-  generateJsonDefault: 15_000,
-  semanticPipelineScore: 120_000,
-  jobEntityExtraction: 90_000,
-  jobLanguagePrep: 45_000,
-} as const;
+/** Ollama client HTTP timeout (all `/api/*` calls): see `OLLAMA_TIMEOUT` in `lib/llm/ollama.ts`. */
 
 /** Job text slicing limits for parsing and pipeline context. */
 export const JOB_TEXT_LIMITS = {

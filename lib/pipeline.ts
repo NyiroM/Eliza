@@ -1,6 +1,6 @@
 import { parseJobText } from "./parsers/jobParser";
 import type { CvParseResult } from "./parsers/cvParser";
-import { generateJsonWithOllama } from "./llm/ollama";
+import { generateJsonWithOllamaStrict } from "./llm/ollama";
 import {
   calculateFitScore,
   collectConstraintSignalHints,
@@ -15,7 +15,6 @@ import {
   CV_CONTEXT_LIMITS,
   DEFAULT_OLLAMA_MODEL,
   JOB_TEXT_LIMITS,
-  OLLAMA_TIMEOUT_MS,
   SEMANTIC_HIGHLIGHT_LIMITS,
   SEMANTIC_SCORER_PROMPT_LIMITS,
 } from "../config/constants";
@@ -295,95 +294,6 @@ function inferFallbackConstraintVeto(
   return { vetoed: false, veto_reason: null };
 }
 
-function buildSchemaCompliantBreakdown(params: {
-  fitScore: number;
-  baseline: FitScoreResult;
-  headNote?: string;
-  constraintHints: string[];
-  veto?: boolean;
-}): string {
-  const { fitScore, baseline, headNote, constraintHints, veto } = params;
-  const b = Math.max(0, Math.min(100, baseline.fit_score));
-  const f = Math.max(0, Math.min(100, fitScore));
-  const matched = baseline.matched_skills.length ? baseline.matched_skills.join(", ") : "none";
-  const missing = baseline.missing_skills.length ? baseline.missing_skills.join(", ") : "none";
-  const hintLine =
-    constraintHints.length > 0 ? ` (${constraintHints.slice(0, 3).join("; ")})` : "";
-  const note = headNote ? `${headNote} ` : "";
-  const arith = veto
-    ? `Arithmetic: veto => 0 (literal baseline ref ${b}%)`
-    : `Arithmetic: ${b} + 0 = ${f} (clamp 0-100)`;
-  return `${note}1) Base Skill Match Score (required-only semantic overlap): ${b}
-2) Skill Overlap: +0% (Matched: ${matched}; Missing: ${missing})
-3) Experience Match: +0% (offline / literal baseline)
-4) Constraint Adjustments (location, job type, work model): +0%${hintLine}
-5) Advantage Bonuses (optional / nice-to-have only): +0%
-6) ${arith}
-7) Final Score: ${f}%`;
-}
-
-function buildSemanticScoringFallback(
-  baseline: FitScoreResult,
-  constraintHints: string[],
-  vetoCheck: { vetoed: boolean; veto_reason: string | null },
-): Record<string, unknown> {
-  if (vetoCheck.vetoed) {
-    return {
-      vetoed: true,
-      veto_reason: vetoCheck.veto_reason,
-      fit_score: 0,
-      mathematical_breakdown: buildSchemaCompliantBreakdown({
-        fitScore: 0,
-        baseline,
-        headNote: `VETO: ${vetoCheck.veto_reason ?? "Hard constraint"}.`,
-        constraintHints,
-        veto: true,
-      }),
-      narrative_summary: "",
-      matched_skills: baseline.matched_skills,
-      missing_skills: baseline.missing_skills,
-      seniority_match: baseline.seniority_match,
-      metadata_fit_badge: "Location Conflict",
-      vibe_warnings: [],
-      semantic_highlights: [],
-      score_components: {
-        base_semantic: 0,
-        skill_overlap_delta: 0,
-        experience_delta: 0,
-        constraint_delta: 0,
-        advantage_bonus: 0,
-      },
-    };
-  }
-  const b0 = Math.max(0, Math.min(100, Math.round(baseline.fit_score)));
-  return {
-    vetoed: false,
-    veto_reason: null,
-    fit_score: baseline.fit_score,
-    mathematical_breakdown: buildSchemaCompliantBreakdown({
-      fitScore: baseline.fit_score,
-      baseline,
-      headNote: "Fallback: semantic scorer unavailable; literal overlap only.",
-      constraintHints,
-      veto: false,
-    }),
-    narrative_summary: "",
-    matched_skills: baseline.matched_skills,
-    missing_skills: baseline.missing_skills,
-    seniority_match: baseline.seniority_match,
-    metadata_fit_badge: null,
-    vibe_warnings: [],
-    semantic_highlights: [],
-    score_components: {
-      base_semantic: b0,
-      skill_overlap_delta: 0,
-      experience_delta: 0,
-      constraint_delta: 0,
-      advantage_bonus: 0,
-    },
-  };
-}
-
 function parseSemanticFitReviewPayload(
   data: unknown,
   baseline: FitScoreResult,
@@ -405,12 +315,8 @@ function parseSemanticFitReviewPayload(
     vetoReason = offlineVeto.veto_reason;
   }
 
-  let matched = strList(o.matched_skills);
-  let missing = strList(o.missing_skills);
-  if (matched.length === 0 && missing.length === 0) {
-    matched = [...baseline.matched_skills];
-    missing = [...baseline.missing_skills];
-  }
+  const matched = strList(o.matched_skills);
+  const missing = strList(o.missing_skills);
 
   let fitScore =
     typeof o.fit_score === "number" && Number.isFinite(o.fit_score)
@@ -507,19 +413,13 @@ async function semanticFitScoreReviewWithLlm(params: {
   baseline: FitScoreResult;
   constraintHints: string[];
   model: string;
-}): Promise<{ review: SemanticFitReview; source: "llm" | "fallback" }> {
+}): Promise<SemanticFitReview> {
   const offlineVeto = inferFallbackConstraintVeto(
     params.constraints,
     typeof params.jobBoardMetadata.job_location === "string"
       ? params.jobBoardMetadata.job_location
       : null,
     params.jobTextEnglish,
-  );
-
-  const fallbackPayload = buildSemanticScoringFallback(
-    params.baseline,
-    params.constraintHints,
-    offlineVeto,
   );
 
   const preferredLocJson = JSON.stringify(params.preferredLocation ?? "");
@@ -529,14 +429,15 @@ async function semanticFitScoreReviewWithLlm(params: {
       ? ""
       : " (benefits/commitments omitted from metadata JSON to save tokens — not referenced in user constraints).";
 
-  const prompt = `Task: fit JSON only. Keys: vetoed,veto_reason,fit_score,mathematical_breakdown,narrative_summary,matched_skills,missing_skills,seniority_match,metadata_fit_badge,vibe_warnings,semantic_highlights,score_components
+  const prompt = `Task: fit JSON only. Output keys in this exact order (logic and veto before narrative):
+vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, narrative_summary, matched_skills, missing_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
 All strings EN.
+
+VETO (decide first): vetoed=true only on a hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason one clear EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
 
 score_components (REQUIRED when vetoed=false): {base_semantic:int, skill_overlap_delta:int, experience_delta:int, constraint_delta:int, advantage_bonus:int}. Integers. Formula: fit_score = clamp(round(base_semantic + skill_overlap_delta + experience_delta + constraint_delta + advantage_bonus), 0, 100). advantage_bonus >= 0. You MUST set fit_score exactly equal to that sum after clamp.
 
 semantic_highlights: 3-5 of {phrase,sentiment:"positive"|"negative",reason}. phrase = exact copy from JOB_TEXT below (short). Pick phrases that moved score most.
-
-VETO: vetoed=true only hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason 1 EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
 
 PREF_LOC_JSON: ${preferredLocJson} — non-empty: soft +2..+12 if align; empty: neutral unless constraints ban region.
 Optional skills: bonus only, never penalty.
@@ -568,15 +469,12 @@ metadata_fit_badge: "Location Conflict"|"Preference Match"|null
 JSON only.`;
 
   console.log("[Backend] Sending prompt to Ollama... (semantic fit scoring)");
-  const llm = await generateJsonWithOllama<Record<string, unknown>>(
-    prompt,
-    fallbackPayload,
-    { model: params.model, timeoutMs: OLLAMA_TIMEOUT_MS.semanticPipelineScore },
-  );
+  const data = await generateJsonWithOllamaStrict<Record<string, unknown>>(prompt, {
+    model: params.model,
+    role: "analysis",
+  });
 
-  const review = parseSemanticFitReviewPayload(llm.data, params.baseline, offlineVeto);
-
-  return { review, source: llm.source };
+  return parseSemanticFitReviewPayload(data, params.baseline, offlineVeto);
 }
 
 export async function runPipelineDetailed(
@@ -605,6 +503,7 @@ export async function runPipelineDetailed(
     constraints,
     undefined,
     storedCv.raw_text ?? "",
+    { strictLlm: true },
   );
   const isEnglish = jobParsed.translation_skipped === true;
   console.log(
@@ -657,7 +556,7 @@ export async function runPipelineDetailed(
   };
   const jobBoardMetadataForScorer = buildJobBoardMetadataForScorer(jobBoardMetadata, constraints);
 
-  const semantic = await semanticFitScoreReviewWithLlm({
+  const semanticReview = await semanticFitScoreReviewWithLlm({
     constraints,
     preferredLocation,
     jobTextEnglish: jobParsed.english_job_text,
@@ -672,11 +571,11 @@ export async function runPipelineDetailed(
   });
 
   const summaryPieces: string[] = [];
-  if (semantic.review.vetoed) {
-    summaryPieces.push(`VETO: ${semantic.review.veto_reason ?? "Hard constraint violation."}`);
+  if (semanticReview.vetoed) {
+    summaryPieces.push(`VETO: ${semanticReview.veto_reason ?? "Hard constraint violation."}`);
   }
-  if (semantic.review.narrative_summary) {
-    summaryPieces.push(semantic.review.narrative_summary);
+  if (semanticReview.narrative_summary) {
+    summaryPieces.push(semanticReview.narrative_summary);
   }
   const summary =
     summaryPieces.length > 0
@@ -694,16 +593,16 @@ export async function runPipelineDetailed(
 
   return {
     result: {
-      fit_score: semantic.review.fit_score,
-      matched_skills: semantic.review.matched_skills,
-      missing_skills: semantic.review.missing_skills,
+      fit_score: semanticReview.fit_score,
+      matched_skills: semanticReview.matched_skills,
+      missing_skills: semanticReview.missing_skills,
       strength_highlights: strengthHighlights,
-      seniority_match: semantic.review.seniority_match,
+      seniority_match: semanticReview.seniority_match,
       summary,
-      mathematical_breakdown: semantic.review.mathematical_breakdown,
-      vibe_warnings: semantic.review.vibe_warnings,
-      semantic_highlights: semantic.review.semantic_highlights,
-      constraint_veto: semantic.review.vetoed,
+      mathematical_breakdown: semanticReview.mathematical_breakdown,
+      vibe_warnings: semanticReview.vibe_warnings,
+      semantic_highlights: semanticReview.semantic_highlights,
+      constraint_veto: semanticReview.vetoed,
       extracted_entities: {
         required_skills: jobParsed.required_skills,
         optional_skills: jobParsed.optional_skills,
@@ -718,14 +617,14 @@ export async function runPipelineDetailed(
         commitments: jobParsed.commitments,
         metadata_constraint_notes: jobParsed.metadata_constraint_notes,
       },
-      metadata_fit_badge: semantic.review.metadata_fit_badge,
+      metadata_fit_badge: semanticReview.metadata_fit_badge,
       analysis_model: model,
       debug: {
         analysis_source: analysisSource,
         cv_parser_source: cvParsed.parser_source,
         job_parser_source: jobParsed.parser_source,
-        constraints_source: semantic.source,
-        fit_score_reconciled_from_components: semantic.review.fit_score_reconciled_from_components,
+        constraints_source: "llm",
+        fit_score_reconciled_from_components: semanticReview.fit_score_reconciled_from_components,
       },
     },
     context: {

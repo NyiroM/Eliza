@@ -1,4 +1,5 @@
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
+import { CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
 
 export type CvRewriteInput = {
   original_bullets: string[];
@@ -78,6 +79,7 @@ Return STRICT JSON only:
 }
 
 Rules:
+- ${CREATIVE_STRUCTURAL_NOISE_INSTRUCTION}
 - Keep every statement honest and realistic
 - Keep professional tone and plain language
 - Keep output easy to edit by user
@@ -97,7 +99,7 @@ ${JSON.stringify(missingSkills)}
     {
       rewritten_bullets: fallbackBullets,
     },
-    { model, timeoutMs: 60_000 },
+    { model, role: "creative_rewrite" },
   );
   const rewritten = sanitizeRewriterResult(llm.data, fallbackBullets);
 

@@ -1,4 +1,8 @@
-import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
+import {
+  generateJsonWithOllama,
+  generateJsonWithOllamaStrict,
+  type ParserSource,
+} from "../llm/ollama";
 import {
   DEFAULT_OLLAMA_MODEL,
   ENGLISH_DETECTION_GERMAN_PROBE_MAX_CHARS,
@@ -7,7 +11,6 @@ import {
   ENGLISH_DETECTION_PHRASE_BONUS_WEIGHT,
   ENGLISH_DETECTION_SAMPLE_MAX_CHARS,
   JOB_TEXT_LIMITS,
-  OLLAMA_TIMEOUT_MS,
 } from "../../config/constants";
 import type { JobParseResult, JobTypeCategory, WorkModel } from "../../types/job";
 
@@ -425,6 +428,8 @@ function extractCommitmentsKeywordFallback(t: string): string[] {
 }
 
 type LangPrepResult = {
+  /** Optional chain-of-thought; ignored by the pipeline after language prep. */
+  prep_rationale?: string;
   is_english: boolean;
   job_text_for_extraction: string;
 };
@@ -593,6 +598,7 @@ function sanitizeJobResult(result: unknown, fallback: JobParseFields): JobParseF
 async function stageLanguageAndTranslate(
   cleanedText: string,
   ollamaModel: string,
+  strictLlm: boolean,
 ): Promise<{ prep: LangPrepResult; source: ParserSource }> {
   const maxLen = JOB_TEXT_LIMITS.languagePrepInputMax;
   const slice = cleanedText.length > maxLen ? cleanedText.slice(0, maxLen) : cleanedText;
@@ -602,8 +608,10 @@ async function stageLanguageAndTranslate(
     job_text_for_extraction: cleanedText,
   };
 
-  const prompt = `Return STRICT JSON: {"is_english":boolean,"job_text_for_extraction":string}
+  const prompt = `Return STRICT JSON with keys in this order (rationale first, then fields):
+{"prep_rationale":string,"is_english":boolean,"job_text_for_extraction":string}
 
+- prep_rationale: 1–2 English sentences on how you detected language and what you kept vs dropped before extraction.
 - If mostly English: is_english true; job_text_for_extraction = input (trim boilerplate headers/footers only).
 - Else: is_english false; translate requirement-heavy parts to English (skills, qualifications, experience). Drop long marketing/company history unless it states hard requirements.
 - Non-English postings: company "25 years on market" ≠ candidate years; "X years experience required" = keep.
@@ -612,9 +620,28 @@ async function stageLanguageAndTranslate(
 INPUT:
 ${slice}`;
 
+  if (strictLlm) {
+    const data = await generateJsonWithOllamaStrict<LangPrepResult>(prompt, {
+      model: ollamaModel,
+      role: "analysis",
+    });
+    const text =
+      typeof data.job_text_for_extraction === "string" ? data.job_text_for_extraction.trim() : "";
+    if (!text) {
+      throw new Error("Ollama language prep returned empty job_text_for_extraction (strict pipeline).");
+    }
+    return {
+      prep: {
+        is_english: Boolean(data.is_english),
+        job_text_for_extraction: text,
+      },
+      source: "llm",
+    };
+  }
+
   const llm = await generateJsonWithOllama<LangPrepResult>(prompt, fallback, {
-    timeoutMs: OLLAMA_TIMEOUT_MS.jobLanguagePrep,
     model: ollamaModel,
+    role: "analysis",
   });
   const data = llm.data;
   if (typeof data.job_text_for_extraction !== "string" || !data.job_text_for_extraction.trim()) {
@@ -637,6 +664,7 @@ async function stageEntityExtraction(
   jobTextForExtraction: string,
   ollamaModel: string,
   userConstraints: string[],
+  strictLlm: boolean,
 ): Promise<{ fields: JobParseFields; source: ParserSource }> {
   const fallbackFields = keywordFallback(jobTextForExtraction);
   const maxLen = JOB_TEXT_LIMITS.entityExtractionSlice;
@@ -651,8 +679,10 @@ async function stageEntityExtraction(
 metadata_constraint_notes: short English bullets when location/work_model/job_type/benefits/commitments align or conflict with a constraint; else [].`
       : `CONSTRAINTS: none → metadata_constraint_notes [].`;
 
-  const prompt = `Extract hiring signals from English job text. STRICT JSON, schema:
-{required_skills[],optional_skills[],estimated_salary|null,required_seniority:"junior"|"mid"|"senior"|"lead"|"unknown",experience_years|null,education|null,job_location|null,work_model:"on-site"|"hybrid"|"remote"|"unknown",job_type:"full-time"|"part-time"|"contract"|"temporary"|"volunteer"|"internship"|"unknown",benefits[],commitments[],metadata_constraint_notes[]}
+  const prompt = `Extract hiring signals from English job text. STRICT JSON with keys in this order (chain-of-thought first, then structured fields):
+{"parsing_rationale":string,"required_skills":string[],"optional_skills":string[],"estimated_salary":string|null,"required_seniority":"junior"|"mid"|"senior"|"lead"|"unknown","experience_years":number|null,"education":string|null,"job_location":string|null,"work_model":"on-site"|"hybrid"|"remote"|"unknown","job_type":"full-time"|"part-time"|"contract"|"temporary"|"volunteer"|"internship"|"unknown","benefits":string[],"commitments":string[],"metadata_constraint_notes":string[]}
+
+- parsing_rationale: 2–4 English sentences on which regions of the posting you trusted for skills vs fluff, and any ambiguity you resolved conservatively.
 
 All string outputs English. estimated_salary as in posting.
 
@@ -704,10 +734,21 @@ ${constraintsBlock}
 JOB_TEXT:
 ${slice}`;
 
+  if (strictLlm) {
+    const data = await generateJsonWithOllamaStrict<EntityExtractionResult>(prompt, {
+      model: ollamaModel,
+      role: "analysis",
+    });
+    return {
+      fields: sanitizeJobResult(data, fallbackFields),
+      source: "llm",
+    };
+  }
+
   const llm = await generateJsonWithOllama<EntityExtractionResult>(
     prompt,
     jobFieldsToEntityFallback(fallbackFields),
-    { timeoutMs: OLLAMA_TIMEOUT_MS.jobEntityExtraction, model: ollamaModel },
+    { model: ollamaModel, role: "analysis" },
   );
 
   return {
@@ -715,6 +756,11 @@ ${slice}`;
     source: llm.source,
   };
 }
+
+export type ParseJobTextOptions = {
+  /** When true (dashboard pipeline), Ollama failures throw instead of silently using keyword fallbacks for skills. */
+  strictLlm?: boolean;
+};
 
 /**
  * Multi-stage job parse: clean artifacts → English-first heuristic (skip LLM prep when job+CV are high-confidence English) → entity extraction.
@@ -725,7 +771,9 @@ export async function parseJobText(
   userConstraints: string[] = [],
   onStage?: (stage: "language_translate" | "entity_extraction") => void,
   cvPlainText?: string | null,
+  options?: ParseJobTextOptions,
 ): Promise<JobParseResult> {
+  const strictLlm = options?.strictLlm === true;
   const model = ollamaModel.trim() || DEFAULT_OLLAMA_MODEL;
   const cleaned = cleanJobArtifacts(jobText);
   const forTranslation = truncateJobForTranslation(
@@ -744,7 +792,7 @@ export async function parseJobText(
     langSource = "fallback";
   } else {
     onStage?.("language_translate");
-    const lang = await stageLanguageAndTranslate(forTranslation, model);
+    const lang = await stageLanguageAndTranslate(forTranslation, model, strictLlm);
     langPrep = lang.prep;
     langSource = lang.source;
   }
@@ -755,16 +803,28 @@ export async function parseJobText(
     textForEntities,
     model,
     userConstraints,
+    strictLlm,
   );
+
+  if (strictLlm) {
+    if (!translationSkipped && langSource === "fallback") {
+      throw new Error("Ollama job language/translate stage failed (strict pipeline).");
+    }
+    if (entitySource === "fallback") {
+      throw new Error("Ollama job entity extraction failed (strict pipeline).");
+    }
+  }
 
   const mergedFallback = keywordFallback(cleaned);
   const metaFallbackEn = keywordFallback(textForEntities);
-  const finalRequired =
-    extracted.required_skills.length > 0
+  const finalRequired = strictLlm
+    ? extracted.required_skills
+    : extracted.required_skills.length > 0
       ? extracted.required_skills
       : mergedFallback.required_skills;
-  const finalOptional =
-    extracted.optional_skills.length > 0
+  const finalOptional = strictLlm
+    ? extracted.optional_skills
+    : extracted.optional_skills.length > 0
       ? extracted.optional_skills
       : mergedFallback.optional_skills;
 
@@ -772,24 +832,44 @@ export async function parseJobText(
     langSource === "llm" || entitySource === "llm" ? "llm" : "fallback";
 
   const pickWorkModel = (): WorkModel =>
-    extracted.work_model !== "unknown" ? extracted.work_model : metaFallbackEn.work_model;
+    strictLlm
+      ? extracted.work_model
+      : extracted.work_model !== "unknown"
+        ? extracted.work_model
+        : metaFallbackEn.work_model;
   const pickJobType = (): JobTypeCategory =>
-    extracted.job_type !== "unknown" ? extracted.job_type : metaFallbackEn.job_type;
+    strictLlm
+      ? extracted.job_type
+      : extracted.job_type !== "unknown"
+        ? extracted.job_type
+        : metaFallbackEn.job_type;
 
   return {
     required_skills: finalRequired,
     optional_skills: finalOptional.filter((s) => !finalRequired.includes(s)),
-    estimated_salary: extracted.estimated_salary ?? mergedFallback.estimated_salary,
+    estimated_salary: strictLlm
+      ? extracted.estimated_salary
+      : extracted.estimated_salary ?? mergedFallback.estimated_salary,
     required_seniority: extracted.required_seniority,
-    experience_years: extracted.experience_years ?? mergedFallback.experience_years,
-    education: extracted.education ?? mergedFallback.education,
-    job_location: extracted.job_location ?? metaFallbackEn.job_location ?? mergedFallback.job_location,
+    experience_years: strictLlm
+      ? extracted.experience_years
+      : extracted.experience_years ?? mergedFallback.experience_years,
+    education: strictLlm ? extracted.education : extracted.education ?? mergedFallback.education,
+    job_location: strictLlm
+      ? extracted.job_location
+      : extracted.job_location ?? metaFallbackEn.job_location ?? mergedFallback.job_location,
     work_model: pickWorkModel(),
     job_type: pickJobType(),
-    benefits:
-      extracted.benefits.length > 0 ? extracted.benefits : metaFallbackEn.benefits.length > 0 ? metaFallbackEn.benefits : mergedFallback.benefits,
-    commitments:
-      extracted.commitments.length > 0
+    benefits: strictLlm
+      ? extracted.benefits
+      : extracted.benefits.length > 0
+        ? extracted.benefits
+        : metaFallbackEn.benefits.length > 0
+          ? metaFallbackEn.benefits
+          : mergedFallback.benefits,
+    commitments: strictLlm
+      ? extracted.commitments
+      : extracted.commitments.length > 0
         ? extracted.commitments
         : metaFallbackEn.commitments.length > 0
           ? metaFallbackEn.commitments

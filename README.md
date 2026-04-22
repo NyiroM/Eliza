@@ -155,7 +155,7 @@ Open **http://localhost:3000**, upload a **PDF CV**, paste a job description, pi
 
 ### Environment
 
-See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://localhost:11434`.
+See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://127.0.0.1:11434` (avoid `0.0.0.0`; use `127.0.0.1` or `localhost` for the client).
 
 ### Chrome extension
 
