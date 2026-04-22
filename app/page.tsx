@@ -361,9 +361,14 @@ export default function DashboardPage() {
     }, 1800);
 
     try {
-      const response = await fetch("/api/pipeline", {
+      const response = await fetch(`/api/pipeline?t=${Date.now()}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
         body: JSON.stringify({
           job: jobText,
           refine_feedback: refineText,

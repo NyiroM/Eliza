@@ -160,9 +160,14 @@ export function App() {
         model: selectedModel,
       };
 
-      const response = await fetch(`${API_BASE}/api/pipeline`, {
+      const response = await fetch(`${API_BASE}/api/pipeline?t=${Date.now()}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
         body: JSON.stringify(payload),
       });
 
