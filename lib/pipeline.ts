@@ -475,6 +475,8 @@ one_sentence_summary: In addition to mathematical_breakdown, provide one concise
 
 semantic_highlights: 3-5 of {phrase,sentiment:"positive"|"negative",reason}. phrase = exact copy from JOB_TEXT below (short). Pick phrases that moved score most.
 
+CRITICAL GAPS & TRANSFERABLE SKILLS: For each missing_skill, if the candidate has highly adjacent skills (e.g., missing "Scripting" but has "System Integration" or "R&D"), include a short note in the reason field: "Transferable from [adjacent skill] background". Do NOT move such skills to irrelevant_extra_skills; keep them in missing_skills with the note.
+
 PREF_LOC_JSON: ${preferredLocJson} — non-empty: soft +2..+12 if align; empty: neutral unless constraints ban region.
 Optional skills: bonus only, never penalty.
 matched_skills/missing_skills: required-only; EN tokens OK.

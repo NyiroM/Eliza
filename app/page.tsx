@@ -805,7 +805,7 @@ export default function DashboardPage() {
                   )}
 
                   {/* Irrelevant extra (slate/blue) */}
-                  {(result.irrelevant_extra_skills?.length ?? 0) > 0 && (
+                  {(result.irrelevant_extra_skills?.length ?? 0) > 0 ? (
                     <div>
                       <p className="mb-1 text-xs font-medium text-sky-300">Your Unused Superpowers</p>
                       <div className="flex flex-wrap gap-2">
@@ -816,6 +816,8 @@ export default function DashboardPage() {
                         ))}
                       </div>
                     </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">All your skills are utilized for this role.</p>
                   )}
                 </div>
               </details>
