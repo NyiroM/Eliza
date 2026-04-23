@@ -1,0 +1,29 @@
+[
+  {
+    "industry": "IT / Software",
+    "hays_label": "Junior IT Support",
+    "seniority": "Junior",
+    "min": 450000,
+    "max": 650000,
+    "modus": 550000,
+    "day_rate": null
+  },
+  {
+    "industry": "IT / Software",
+    "hays_label": "Automation Engineer",
+    "seniority": "Senior",
+    "min": 1200000,
+    "max": 1500000,
+    "modus": 1350000,
+    "day_rate": null
+  },
+  {
+    "industry": "IT / Software",
+    "hays_label": "IT Contracting",
+    "seniority": "Medior",
+    "min": 40000,
+    "max": 50000,
+    "modus": 45000,
+    "day_rate": 45000
+  }
+]

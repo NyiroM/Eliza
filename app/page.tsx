@@ -980,6 +980,50 @@ export default function DashboardPage() {
           ) : null}
         </section>
 
+        {/* Salary Forecast card (Hays 2026) */}
+        {result?.salary_analysis && (
+          <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 mt-6">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-2">Salary Forecast</h3>
+            <div className="space-y-2">
+              <p className="text-sm text-slate-200">{result.salary_analysis.rationale}</p>
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-medium text-slate-400">Match:</span>
+                {(() => {
+                  switch (result.salary_analysis.match_status) {
+                    case 'above_limit':
+                      return (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">
+                          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 8 8">
+                            <circle cx="4" cy="4" r="3" />
+                          </svg>
+                          Above your minimum
+                        </span>
+                      );
+                    case 'borderline':
+                      return (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+                          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 8 8">
+                            <circle cx="4" cy="4" r="3" />
+                          </svg>
+                          Borderline
+                        </span>
+                      );
+                    case 'below_limit':
+                      return (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800">
+                          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 8 8">
+                            <circle cx="4" cy="4" r="3" />
+                          </svg>
+                          Below your minimum
+                        </span>
+                      );
+                  }
+                })()}
+              </div>
+            </div>
+          </section>
+        )}
+
         {message ? <p className="text-sm text-amber-300">{message}</p> : null}
       </div>
     </main>

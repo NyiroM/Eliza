@@ -33,6 +33,7 @@ import type {
   ScoreComponents,
   SemanticHighlight,
 } from "../types/pipeline";
+import { runSalaryOracle } from "../lib/salary-oracle";
 
 export type {
   PipelineContext,
@@ -632,6 +633,14 @@ export async function runPipelineDetailed(
     correctionsBlock,
   });
 
+  // Run Salary Oracle
+  const salaryOracleResult = await runSalaryOracle({
+    jobText: params.job,
+    jobParsed,
+    constraints,
+    model,
+  });
+
   const summaryPieces: string[] = [];
   if (semanticReview.vetoed) {
     summaryPieces.push(`VETO: ${semanticReview.veto_reason ?? "Hard constraint violation."}`);
@@ -653,6 +662,9 @@ export async function runPipelineDetailed(
       ? "llm"
       : "fallback";
 
+  // Attach salary analysis if present
+  const salary_analysis = salaryOracleResult.salary_analysis;
+
   return {
     result: {
       fit_score: semanticReview.fit_score,
@@ -666,6 +678,7 @@ export async function runPipelineDetailed(
       vibe_warnings: semanticReview.vibe_warnings,
       semantic_highlights: semanticReview.semantic_highlights,
       constraint_veto: semanticReview.vetoed,
+      salary_analysis,
       extracted_entities: {
         required_skills: jobParsed.required_skills,
         optional_skills: jobParsed.optional_skills,

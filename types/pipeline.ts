@@ -62,6 +62,25 @@ export type PipelineOutput = {
   semantic_highlights: SemanticHighlight[];
   /** Skills present in CV but not required by job (user’s unused superpowers). */
   irrelevant_extra_skills?: string[];
+  /** Hays-2026 salary analysis for the role. */
+  salary_analysis?: {
+    /** Hays role label matched (e.g., "Automation Engineer"). */
+    hays_matched_label?: string;
+    /** Confidence 0–1 in the match. */
+    confidence_score: number;
+    /** Low confidence flag (e.g., ambiguous title). */
+    low_confidence?: boolean;
+    /** Estimated minimum gross monthly salary (HUF). */
+    estimated_min: number;
+    /** Estimated maximum gross monthly salary (HUF). */
+    estimated_max: number;
+    /** Estimated typical (modus) gross monthly salary (HUF). */
+    estimated_modus: number;
+    /** Comparison vs user floor. */
+    match_status: "above_limit" | "borderline" | "below_limit";
+    /** Short rationale for the user. */
+    rationale: string;
+  };
   debug: {
     analysis_source: "llm" | "fallback";
     cv_parser_source: "llm" | "fallback";
