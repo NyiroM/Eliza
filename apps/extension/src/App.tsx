@@ -106,7 +106,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void loadOllamaModels();
+    const timerId = window.setTimeout(() => {
+      void loadOllamaModels();
+    }, 0);
+    return () => {
+      window.clearTimeout(timerId);
+    };
   }, [loadOllamaModels]);
 
   useEffect(() => {
