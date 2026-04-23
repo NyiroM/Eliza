@@ -22,47 +22,76 @@
 ELIZA follows a deterministic, pipeline-based flow from raw inputs to dashboard output:
 
 ```mermaid
-flowchart LR
-  subgraph Inputs
-    J[Job posting text]
-    C[CV PDF / text]
-  end
+flowchart TD
+    %% Inputs
+    subgraph Inputs ["1. Bemeneti Adatok"]
+        J[Álláshirdetés szövege]
+        C[CV / Core Stories]
+        U[Felhasználói korlátok & Bérigény]
+    end
 
-  subgraph JobExtraction
-    EN{English-first\nheuristic}
-    LT[LLM language prep\nand translation]
-    JE[Structured job\nentity extraction]
-    J --> EN
-    EN -->|high confidence| JE
-    EN -->|ambiguous or\nnon-English| LT
-    LT --> JE
-  end
+    %% Extraction & Prep
+    subgraph Extraction ["2. Entitás kinyerés & Nyelvi előkészítés"]
+        EN{Nyelv detektálás}
+        TRANS[LLM Fordítás / Prep]
+        JE[Strukturált Job Entity: \n Skillek, Seniority, Béradatok]
+        
+        J --> EN
+        EN -- Nem Angol --> TRANS
+        TRANS --> JE
+        EN -- Angol --> JE
+        C --> CP[CV Parser: \n Tapasztalat & Készségek]
+    end
 
-  subgraph CvExtraction
-    CP[CV parser\nskills + stories]
-  end
+    %% The Oracle Logic
+    subgraph Oracle ["3. ELIZA Salary Oracle & RAG"]
+        RAG[(Hays 2026 \n Market Database)]
+        EXT_SAL[Kinyert béradatok]
+        
+        JE --> EXT_SAL
+        EXT_SAL -- Nincs adat --> RAG
+        
+        NORM{Normalizáló Motor}
+        EXT_SAL --> NORM
+        RAG --> NORM
+        
+        CURR[Valuta váltás: \n EUR/GBP -> HUF]
+        SCALE[Day-rate Scaling: \n 10k-150k range * 20]
+        
+        NORM --> CURR
+        CURR --> SCALE
+    end
 
-  subgraph Pruning
-    P[Pruned CV context\nskills, seniority,\nexperience snippets]
-  end
+    %% Scoring & Veto
+    subgraph Analysis ["4. Scoring & Veto Kapu"]
+        SCO[Semantic Fit Scoring: \n DeepSeek-R1 / Qwen]
+        VETO{VETO ENGINE}
+        
+        U --> VETO
+        JE --> VETO
+        CP --> SCO
+        JE --> SCO
+        
+        VETO -- Ütközés --> FAIL[Match Score: 0% \n Status: VETOED]
+        VETO -- Tiszta --> PASS[Végleges Scoring]
+    end
 
-  subgraph Scoring
-    B[Literal baseline\noverlap + rules]
-    R["DeepSeek-R1\n(or other JSON model)\nsemantic review"]
-  end
+    %% Output
+    subgraph Output ["5. Strukturált Output"]
+        UI[ELIZA Dashboard: \n Match Score, Gap Analysis, \n Salary Forecast & Veto Rationale]
+    end
 
-  subgraph Output
-    U[Pipeline JSON\n→ UI mapping]
-  end
+    SCALE --> UI
+    PASS --> UI
+    FAIL --> UI
+    SCO --> PASS
 
-  C --> CP
-  JE --> P
-  CP --> P
-  JE --> B
-  CP --> B
-  P --> R
-  B --> R
-  R --> U
+    %% Styling
+    style VETO fill:#f96,stroke:#333,stroke-width:4px
+    style RAG fill:#bbf,stroke:#333,stroke-width:2px
+    style FAIL fill:#f66,stroke:#333,stroke-width:2px
+    style PASS fill:#6f6,stroke:#333,stroke-width:2px
+    style Oracle fill:#f5f5f5,stroke:#999,stroke-dasharray: 5 5
 ```
 
 1. **Job / CV** — You provide posting text and a stored CV (uploaded PDF).
