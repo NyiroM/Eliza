@@ -234,6 +234,7 @@ type SemanticFitReview = {
   narrative_summary: string;
   matched_skills: string[];
   missing_skills: string[];
+  irrelevant_extra_skills: string[];
   seniority_match: boolean;
   metadata_fit_badge: "Location Conflict" | "Preference Match" | null;
   vibe_warnings: string[];
@@ -377,6 +378,17 @@ function parseSemanticFitReviewPayload(
   const matchedLower = [...new Set(matched.map((s) => s.toLowerCase()))].sort();
   const missingLower = [...new Set(missing.map((s) => s.toLowerCase()))].sort();
 
+  // Compute irrelevant_extra_skills: skills present in CV but not required by job
+  const cvSkillsSet = new Set((baseline.matched_skills ?? []).map((s) => s.toLowerCase()));
+  const requiredSkillsSet = new Set(missingLower);
+  const irrelevantExtraSkills: string[] = [];
+  for (const cvSkill of cvSkillsSet) {
+    if (!requiredSkillsSet.has(cvSkill)) {
+      irrelevantExtraSkills.push(cvSkill);
+    }
+  }
+  irrelevantExtraSkills.sort();
+
   let fitScoreReconciled = false;
   const scoreComponents = parseScoreComponents(o.score_components);
   if (!vetoed && scoreComponents) {
@@ -413,6 +425,7 @@ function parseSemanticFitReviewPayload(
     narrative_summary: narrative,
     matched_skills: matchedLower,
     missing_skills: missingLower,
+    irrelevant_extra_skills: irrelevantExtraSkills,
     seniority_match: seniorityMatch,
     metadata_fit_badge: badge,
     vibe_warnings: vibeWarnings,
@@ -451,7 +464,7 @@ async function semanticFitScoreReviewWithLlm(params: {
       : " (benefits/commitments omitted from metadata JSON to save tokens — not referenced in user constraints).";
 
   const prompt = `Task: fit JSON only. Output keys in this exact order (logic and veto before narrative):
-vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
+vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, irrelevant_extra_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
 All strings EN.
 
 VETO (decide first): vetoed=true only on a hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason one clear EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
