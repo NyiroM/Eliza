@@ -7,6 +7,15 @@ import { redactSensitiveData } from "../security/redactSensitiveData";
 /** Single ceiling for every Ollama HTTP call from this module (generate + tags). */
 export const OLLAMA_TIMEOUT = 300_000;
 
+/** Safety ceiling for num_predict (unlimited is -1 in Ollama). */
+export const OLLAMA_MAX_PREDICT = 8192;
+
+/** Default context window for all Ollama calls. */
+export const OLLAMA_NUM_CTX = 16384;
+
+/** Default low temperature for analytical consistency. */
+export const OLLAMA_DEFAULT_TEMPERATURE = 0.1;
+
 type OllamaGenerateResponse = {
   response?: unknown;
 };
@@ -29,15 +38,23 @@ export type GenerateJsonOptions = {
   /** Ollama model name (must exist locally). Default: llama3 */
   model?: string;
   /**
-   * analysis: strict sampling + auditor system; see `getOllamaOptions` for per-model overrides.
-   * extract_cv: strict sampling, grounded system (cvParser).
-   * creative_coach / creative_rewrite: Mirostat or top_p path; see `getOllamaOptions`.
+   * analysis: analytical consistency (low temperature).
+   * extract_cv: grounded extraction (low temperature).
+   * creative_coach / creative_rewrite: creative prose (higher temperature).
    */
   role?: JsonGenerateRole;
   /**
    * When `role` is `analysis`, appended to the system prompt (e.g. user corrections file).
    */
   systemAppend?: string;
+  /**
+   * Optional sampling parameters. If not provided, Ollama uses model defaults.
+   */
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  repeat_penalty?: number;
+  num_predict?: number;
 };
 
 export class OllamaRequestError extends Error {
@@ -67,17 +84,15 @@ const OLLAMA_CREATIVE_COACH_SYSTEM = `${OLLAMA_JSON_ENGINE} You are a profession
 /** CV bullet rewrite */
 const OLLAMA_CREATIVE_REWRITE_SYSTEM = `${OLLAMA_JSON_ENGINE} You are an expert CV editor: improve clarity and impact without inventing facts, metrics, or tools.`;
 
-const CREATIVE_NUM_PREDICT = 4096;
+const CREATIVE_NUM_PREDICT = OLLAMA_MAX_PREDICT;
 /** Default strict generation budget before model-specific bumps. */
-const STRICT_NUM_PREDICT_BASE = 1024;
+const STRICT_NUM_PREDICT_BASE = OLLAMA_MAX_PREDICT;
 /** DeepSeek-R1: long hidden reasoning before JSON — keep headroom for CoT + payload. */
-const STRICT_NUM_PREDICT_DEEPSEEK_R1 = 12_288;
+const STRICT_NUM_PREDICT_DEEPSEEK_R1 = OLLAMA_MAX_PREDICT;
 /** Any tag containing R1-style reasoning needs at least this much headroom. */
-const STRICT_NUM_PREDICT_R1_MIN = 4096;
+const STRICT_NUM_PREDICT_R1_MIN = OLLAMA_MAX_PREDICT;
 
-const NUM_CTX_GLOBAL = 16_384;
-/** v0.3 Gemma-style loop mitigation: applied to every generate call after role-specific options. */
-const GLOBAL_REPEAT_PENALTY = 1.2;
+const NUM_CTX_GLOBAL = OLLAMA_NUM_CTX;
 
 function isStrictRole(role: JsonGenerateRole): boolean {
   return role === "analysis" || role === "extract_cv";
@@ -124,52 +139,22 @@ function getOllamaSystemPrompt(role: JsonGenerateRole): string {
 }
 
 /**
- * Builds the `options` object for Ollama `/api/generate`: hard-coded `num_ctx: 16384`, model/role tuning,
- * then global `repeat_penalty: 1.2` (Gemma loop fix). Strict roles use root-level `stop` via `getOllamaStopForRole`.
+ * Builds the `options` object for Ollama `/api/generate`: static `num_ctx: 16384`, `format: "json"`,
+ * and a low default `temperature: 0.1`. All other sampling parameters are optional and fall back to model defaults.
  */
-export function getOllamaOptions(model: string, role: JsonGenerateRole): Record<string, unknown> {
-  const m = model.trim().toLowerCase();
+export function getOllamaOptions(model: string, role: JsonGenerateRole, options?: GenerateJsonOptions): Record<string, unknown> {
   const opts: Record<string, unknown> = {
     num_ctx: NUM_CTX_GLOBAL,
+    format: "json",
+    temperature: options?.temperature ?? OLLAMA_DEFAULT_TEMPERATURE,
+    num_predict: options?.num_predict ?? OLLAMA_MAX_PREDICT,
   };
 
-  if (isStrictRole(role)) {
-    opts.temperature = 0;
-    if (role === "analysis" && isGemmaModel(m)) {
-      opts.temperature = 0.1;
-      opts.top_k = 30;
-    }
+  // Allow caller to override any sampling parameter (only if explicitly provided)
+  if (options?.top_p !== undefined) opts.top_p = options.top_p;
+  if (options?.top_k !== undefined) opts.top_k = options.top_k;
+  if (options?.repeat_penalty !== undefined) opts.repeat_penalty = options.repeat_penalty;
 
-    let num_predict = STRICT_NUM_PREDICT_BASE;
-    if (isDeepSeekR1Model(m)) {
-      num_predict = STRICT_NUM_PREDICT_DEEPSEEK_R1;
-    } else if (isReasoningR1Family(m)) {
-      num_predict = Math.max(num_predict, STRICT_NUM_PREDICT_R1_MIN);
-    }
-    opts.num_predict = num_predict;
-
-    if (isLlama31_8B(m)) {
-      opts.top_p = 0.1;
-      opts.top_k = 20;
-    } else if (isQwen25Family(m)) {
-      opts.top_p = 0.05;
-    }
-
-    opts.repeat_penalty = GLOBAL_REPEAT_PENALTY;
-    return opts;
-  }
-
-  if (!creativePrefersClassicSampling(m)) {
-    opts.mirostat = 2;
-    opts.mirostat_eta = 0.1;
-    opts.mirostat_tau = 5.0;
-    opts.temperature = 0;
-  } else {
-    opts.temperature = 0.7;
-    opts.top_p = 0.9;
-  }
-  opts.num_predict = CREATIVE_NUM_PREDICT;
-  opts.repeat_penalty = GLOBAL_REPEAT_PENALTY;
   return opts;
 }
 
@@ -372,12 +357,13 @@ async function ollamaGenerateRaw(
   model: string,
   role?: JsonGenerateRole,
   systemAppend?: string,
+  options?: GenerateJsonOptions,
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT);
   const url = getOllamaGenerateUrl();
   const r: JsonGenerateRole = role ?? "analysis";
-  const resolvedOptions = getOllamaOptions(model, r);
+  const resolvedOptions = getOllamaOptions(model, r, options);
   const stop = getOllamaStopForRole(r);
   let system = getOllamaSystemPrompt(r);
   if (r === "analysis" && systemAppend?.trim()) {
@@ -473,7 +459,7 @@ export async function generateJsonWithOllamaStrict<T>(
 ): Promise<T> {
   const model = options?.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const role = options?.role ?? "analysis";
-  const raw = await ollamaGenerateRaw(prompt, model, role, options?.systemAppend);
+  const raw = await ollamaGenerateRaw(prompt, model, role, options?.systemAppend, options);
   const parsed = parseOllamaJsonContent<T>(raw);
   if (parsed.ok) {
     return parsed.data;
@@ -495,7 +481,7 @@ export async function generateJsonWithOllama<T>(
   const model = options?.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const role = options?.role ?? "analysis";
   try {
-    const raw = await ollamaGenerateRaw(prompt, model, role, options?.systemAppend);
+    const raw = await ollamaGenerateRaw(prompt, model, role, options?.systemAppend, options);
     const parsed = parseOllamaJsonContent<T>(raw);
     if (parsed.ok) {
       return { data: parsed.data, source: "llm" };
@@ -508,7 +494,7 @@ export async function generateJsonWithOllama<T>(
   } catch (ollamaErr) {
     console.error(
       "[Ollama Error] Request failed (soft fallback):",
-      ollamaErr instanceof Error ? ollamaErr.message : ollamaErr,
+      ollamaErr instanceof Error ? redactSensitiveData(ollamaErr.message) : ollamaErr,
     );
     return { data: fallback, source: "fallback" };
   }
