@@ -173,6 +173,7 @@ export function App() {
           "Content-Type": "application/json",
           "Cache-Control": "no-cache",
           Pragma: "no-cache",
+          "X-Eliza-Internal": "true",
         },
         body: JSON.stringify(payload),
       });
@@ -204,7 +205,7 @@ export function App() {
     try {
       const response = await fetch(`${API_BASE}/api/generate-assets`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({
           job_text: jobText.trim(),
           model: selectedModel,
@@ -240,7 +241,7 @@ export function App() {
     try {
       const response = await fetch(`${API_BASE}/api/user-constraints`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ constraint: refineText }),
       });
       const data = (await response.json()) as ConstraintsState & { error?: string };

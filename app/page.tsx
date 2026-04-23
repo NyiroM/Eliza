@@ -193,7 +193,7 @@ export default function DashboardPage() {
     try {
       const response = await fetch("/api/user-preferences", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ preferred_location: targetLocation.trim() || null }),
       });
       const data = (await response.json()) as { preferred_location?: string | null; error?: string };
@@ -241,6 +241,7 @@ export default function DashboardPage() {
 
       const response = await fetch("/api/upload-cv", {
         method: "POST",
+        headers: { "X-Eliza-Internal": "true" },
         body: formData,
       });
       const data = (await response.json()) as { error?: string };
@@ -301,6 +302,7 @@ export default function DashboardPage() {
           "Content-Type": "application/json",
           "Cache-Control": "no-cache",
           Pragma: "no-cache",
+          "X-Eliza-Internal": "true",
         },
         body: JSON.stringify({
           job: jobText,
@@ -346,7 +348,7 @@ export default function DashboardPage() {
     try {
       const res = await fetch("/api/corrections", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ correction: text }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
@@ -373,7 +375,7 @@ export default function DashboardPage() {
     try {
       const response = await fetch("/api/generate-assets", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({
           job_text: jobText.trim(),
           model: selectedModel,
@@ -410,7 +412,7 @@ export default function DashboardPage() {
     try {
       const response = await fetch("/api/user-constraints", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ constraint: refineText }),
       });
       const data = (await response.json()) as ConstraintsState & { error?: string };
@@ -433,7 +435,7 @@ export default function DashboardPage() {
     try {
       const response = await fetch("/api/user-constraints", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ constraint: item }),
       });
       const data = (await response.json()) as ConstraintsState & { error?: string };

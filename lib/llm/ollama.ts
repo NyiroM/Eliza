@@ -2,6 +2,7 @@
 
 import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
+import { redactSensitiveData } from "../security/redactSensitiveData";
 
 /** Single ceiling for every Ollama HTTP call from this module (generate + tags). */
 export const OLLAMA_TIMEOUT = 300_000;
@@ -45,6 +46,8 @@ export class OllamaRequestError extends Error {
     this.name = "OllamaRequestError";
   }
 }
+
+const isDevelopment = false;
 
 const OLLAMA_JSON_ENGINE =
   "You are a JSON-only response engine. Do not include markdown blocks like ```json, and do not provide conversational text. Output ONLY the raw JSON object.";
@@ -213,14 +216,12 @@ function logUnparseableOllamaJson(raw: string, cleaned: string, message: string)
   console.error(
     "[Ollama Error] JSON.parse failed after cleanOllamaResponse (thinking stripped, golden {…} slice).",
     "Parse message:",
-    message,
+    redactSensitiveData(message),
   );
-  console.error("[Ollama Error] Full raw model response (length=%d):\n%s", raw.length, raw);
-  console.error(
-    "[Ollama Error] Cleaned candidate (length=%d, first 800 chars):\n%s",
-    cleaned.length,
-    cleaned.slice(0, 800),
-  );
+  if (isDevelopment) {
+    console.error("[Ollama Debug] Raw model response length=%d", raw.length);
+    console.error("[Ollama Debug] Cleaned candidate length=%d", cleaned.length);
+  }
 }
 
 /** Ollama HTTP API base when env is unset or invalid (0.0.0.0 is not valid for client fetch). */
@@ -436,9 +437,14 @@ async function ollamaGenerateRaw(
     }
 
     const rawResponse = data.response;
-    const preview = rawResponse.slice(0, 500);
-    const suffix = rawResponse.length > 500 ? "..." : "";
-    console.log(`[Backend] Ollama Response (Raw): ${preview}${suffix}`);
+    const tokenCount = Math.max(1, Math.ceil(rawResponse.length / 4));
+    console.log(
+      "[Backend] Ollama response received:",
+      JSON.stringify({ model, tokenCount }),
+    );
+    if (isDevelopment) {
+      console.log("[Ollama Debug] Raw response length=%d", rawResponse.length);
+    }
     return rawResponse;
   } catch (err) {
     if (err instanceof OllamaRequestError) {
@@ -448,7 +454,7 @@ async function ollamaGenerateRaw(
       throwOllamaSlowTimeout();
     }
     const detail = describeNetworkFailure(url, err);
-    const msg = `[Ollama Error] ${detail}`;
+    const msg = `[Ollama Error] ${redactSensitiveData(detail)}`;
     if (err instanceof Error && err.stack) {
       console.error(err.stack);
     } else {

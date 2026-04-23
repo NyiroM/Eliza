@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { assertOllamaModelInstalled, OllamaRequestError } from "../../../lib/llm/ollama";
 import { runPipelineDetailed } from "../../../lib/pipeline";
+import { redactSensitiveData } from "../../../lib/security/redactSensitiveData";
 import { addUserConstraint } from "../../../lib/storage/userConstraints";
 import {
   validateJobDescription,
@@ -19,6 +20,7 @@ export const maxDuration = 300;
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0",
 } as const;
+const PIPELINE_ERROR_BODY = { error: "Analysis failed", code: "PIPELINE_ERROR" } as const;
 
 function jsonNoStore(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: NO_STORE_HEADERS });
@@ -73,8 +75,8 @@ export async function POST(request: NextRequest) {
         : err instanceof Error
           ? err.message
           : "Ollama model check failed.";
-    console.error(`[Backend] pipeline ${requestId} model check failed:`, message);
-    return jsonNoStore({ error: message, request_id: requestId }, 500);
+    console.error(`[Backend] pipeline ${requestId} model check failed:`, redactSensitiveData(message));
+    return jsonNoStore(PIPELINE_ERROR_BODY, 500);
   }
 
   const plocCheck = validatePreferredLocationField(body.preferred_location);
@@ -100,8 +102,8 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Pipeline failed due to an unexpected error.";
-    console.error(`[Backend] pipeline ${requestId} failed (500):`, message);
-    return jsonNoStore({ error: message, request_id: requestId }, 500);
+    console.error(`[Backend] pipeline ${requestId} failed (500):`, redactSensitiveData(message));
+    return jsonNoStore(PIPELINE_ERROR_BODY, 500);
   }
   const { result } = resultData;
 
