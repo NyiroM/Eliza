@@ -377,6 +377,7 @@ function parseSemanticFitReviewPayload(
   const vibeWarnings = strList(o.vibe_warnings);
   const semanticHighlights = parseSemanticHighlights(o.semantic_highlights);
 
+  // Compute lowercase skill sets for prompt and downstream use
   const matchedLower = [...new Set(matched.map((s) => s.toLowerCase()))].sort();
   const missingLower = [...new Set(missing.map((s) => s.toLowerCase()))].sort();
 
@@ -476,6 +477,21 @@ async function semanticFitScoreReviewWithLlm(params: {
     "benefits" in params.jobBoardMetadata || "commitments" in params.jobBoardMetadata
       ? ""
       : " (benefits/commitments omitted from metadata JSON to save tokens — not referenced in user constraints).";
+
+  // Compute missingLower and irrelevantExtraSkills here for prompt safety
+  const matched = strList(o.matched_skills);
+  const missing = strList(o.missing_skills);
+  const matchedLower = [...new Set(matched.map((s) => s.toLowerCase()))].sort();
+  const missingLower = [...new Set(missing.map((s) => s.toLowerCase()))].sort();
+  const cvSkillsSet = new Set((params.baseline.matched_skills ?? []).map((s) => s.toLowerCase()));
+  const requiredSkillsSet = new Set(missingLower);
+  const irrelevantExtraSkills: string[] = [];
+  for (const cvSkill of cvSkillsSet) {
+    if (!requiredSkillsSet.has(cvSkill)) {
+      irrelevantExtraSkills.push(cvSkill);
+    }
+  }
+  irrelevantExtraSkills.sort();
 
   const prompt = `Task: fit JSON only. Output keys in this exact order (logic and veto before narrative):
 vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, irrelevant_extra_skills, interview_prep, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
@@ -650,8 +666,8 @@ export async function runPipelineDetailed(
     role: 'creative_coach',
   });
 
-  // Run Salary Oracle
-  let salaryOracleResult;
+  // Run Salary Oracle (resilient)
+  let salaryOracleResult = { salary_analysis: null };
   try {
     salaryOracleResult = await runSalaryOracle({
       jobText: input.job,
@@ -661,7 +677,6 @@ export async function runPipelineDetailed(
     });
   } catch (err) {
     console.error('[Pipeline] Salary Oracle failed:', err);
-    salaryOracleResult = { salary_analysis: null };
   }
 
   const summaryPieces: string[] = [];
@@ -687,6 +702,22 @@ export async function runPipelineDetailed(
 
   // Attach salary analysis (defensive: fallback to null if missing)
   const salary_analysis = salaryOracleResult?.salary_analysis ?? null;
+
+  // Parse interview_prep safely (resilient)
+  let interview_prep: Array<{ question: string; cheat_sheet: string }> = [];
+  try {
+    interview_prep = Array.isArray(o.interview_prep)
+      ? o.interview_prep
+          .filter((q: any) => q?.question && q?.cheat_sheet)
+          .slice(0, 3)
+          .map((q: any) => ({
+            question: String(q.question).trim(),
+            cheat_sheet: String(q.cheat_sheet).trim(),
+          }))
+      : [];
+  } catch (e) {
+    console.error('[Pipeline] Failed to parse interview_prep:', e);
+  }
 
   return {
     result: {
