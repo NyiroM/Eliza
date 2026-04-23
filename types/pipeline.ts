@@ -34,6 +34,8 @@ export type PipelineOutput = {
   strength_highlights: string[];
   seniority_match: boolean;
   summary: string;
+  /** Single headline sentence for the user (most important factor). */
+  one_sentence_summary: string;
   /** Model name used for this analysis (from client or default). */
   analysis_model: string;
   extracted_entities: {

@@ -9,6 +9,8 @@ type StoredCvPayload = {
   raw_text: string;
   parsed: CvParseResult;
   uploaded_at: string;
+  /** Original upload filename for cache logging (optional). */
+  source_filename?: string | null;
 };
 
 export async function saveParsedCvToStorage(payload: StoredCvPayload): Promise<void> {
@@ -28,6 +30,7 @@ export async function loadStoredCvFromStorage(): Promise<StoredCvPayload | null>
 export async function parseAndStoreCvFromPdfBuffer(
   pdfBuffer: Buffer,
   ollamaModel = "llama3",
+  sourceFilename?: string | null,
 ): Promise<StoredCvPayload> {
   const rawText = await parseCvPdfBuffer(pdfBuffer);
   const parsed = await parseCvText(rawText, ollamaModel);
@@ -35,6 +38,9 @@ export async function parseAndStoreCvFromPdfBuffer(
     raw_text: rawText,
     parsed,
     uploaded_at: new Date().toISOString(),
+    ...(sourceFilename != null && sourceFilename.trim()
+      ? { source_filename: sourceFilename.trim() }
+      : {}),
   };
   await saveParsedCvToStorage(payload);
   return payload;

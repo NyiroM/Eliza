@@ -22,6 +22,7 @@ type PipelineResult = {
   strength_highlights?: string[];
   seniority_match: boolean;
   summary: string;
+  one_sentence_summary?: string;
   mathematical_breakdown?: string;
   vibe_warnings?: string[];
   semantic_highlights?: SemanticHighlight[];
@@ -119,6 +120,9 @@ export default function DashboardPage() {
   const [targetLocation, setTargetLocation] = useState("");
   const [prefsLocationBusy, setPrefsLocationBusy] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
+  const [correctionDraft, setCorrectionDraft] = useState("");
+  const [correctionBusy, setCorrectionBusy] = useState(false);
+  const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
   /** Re-runs must not be blocked while application assets generate; `loadingAnalysis` is the only busy gate. */
   const canRunAnalysis = status.loaded && jobText.trim().length > 0 && !loadingAnalysis;
 
@@ -330,6 +334,34 @@ export default function DashboardPage() {
     status.loaded,
     loadConstraints,
   ]);
+
+  const submitUserCorrection = useCallback(async () => {
+    const text = correctionDraft.trim();
+    if (!text) {
+      setCorrectionMessage("Enter a correction first.");
+      return;
+    }
+    setCorrectionBusy(true);
+    setCorrectionMessage(null);
+    try {
+      const res = await fetch("/api/corrections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correction: text }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok) {
+        setCorrectionMessage(data.error ?? "Save failed.");
+        return;
+      }
+      setCorrectionDraft("");
+      setCorrectionMessage("Saved. It will apply on the next analysis run.");
+    } catch {
+      setCorrectionMessage("Could not reach corrections API.");
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }, [correctionDraft]);
 
   async function generateApplicationBundle() {
     if (!result || result.fit_score <= 0) {
@@ -631,7 +663,15 @@ export default function DashboardPage() {
                       {result.seniority_match ? "Yes" : "No"}
                     </span>
                   </p>
-                  {result.summary ? (
+                  <p className="text-base font-medium leading-snug text-slate-100">
+                    {result.one_sentence_summary ??
+                      result.summary ??
+                      "Open Match analysis below for the full numeric breakdown."}
+                  </p>
+                  {result.summary &&
+                  result.summary !==
+                    (result.one_sentence_summary ??
+                      "") ? (
                     <p className="text-sm leading-relaxed text-slate-400">{result.summary}</p>
                   ) : null}
                 </div>
@@ -647,11 +687,11 @@ export default function DashboardPage() {
                 </div>
               ) : null}
 
-              <div className="rounded-md border border-slate-600 bg-slate-950 p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Match analysis
-                </p>
-                <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-slate-100">
+              <details className="group rounded-md border border-slate-600 bg-slate-950 p-3">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-400 marker:text-slate-500">
+                  View details (mathematical breakdown)
+                </summary>
+                <pre className="mt-3 whitespace-pre-wrap font-mono text-sm leading-relaxed text-slate-100">
                   {result.mathematical_breakdown ?? "Not available."}
                 </pre>
                 <p className="mt-2 text-[11px] leading-snug text-slate-500">
@@ -663,6 +703,36 @@ export default function DashboardPage() {
                     ? " (this run was adjusted for consistency)."
                     : "."}
                 </p>
+              </details>
+
+              <div className="rounded-md border border-slate-700 bg-slate-950/50 p-3 space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Your corrections
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Saved lines are treated as absolute truth on the next analysis (e.g. industry, skills
+                  you do have).
+                </p>
+                <textarea
+                  value={correctionDraft}
+                  onChange={(e) => setCorrectionDraft(e.target.value)}
+                  placeholder='e.g. "This role is not IT — ignore tech stack gaps"'
+                  rows={2}
+                  className="w-full resize-y rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-slate-200 placeholder:text-slate-600"
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void submitUserCorrection()}
+                    disabled={correctionBusy}
+                    className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600 disabled:opacity-50"
+                  >
+                    {correctionBusy ? "Saving…" : "Save correction"}
+                  </button>
+                  {correctionMessage ? (
+                    <span className="text-xs text-slate-400">{correctionMessage}</span>
+                  ) : null}
+                </div>
               </div>
 
               <div className="rounded-md border border-slate-700 bg-slate-950/50 p-3">

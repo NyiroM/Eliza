@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
 
   let stored;
   try {
-    stored = await parseAndStoreCvFromPdfBuffer(buffer, model);
+    stored = await parseAndStoreCvFromPdfBuffer(buffer, model, file.name);
   } catch {
     return NextResponse.json(
       { error: "Could not parse PDF content. Please upload a valid CV PDF." },

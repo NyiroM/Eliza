@@ -1,5 +1,11 @@
+import {
+  formatCvCacheLabel,
+  getCvParseCacheKey,
+  readCvParseCache,
+  writeCvParseCache,
+} from "./cache/cvParseCache";
 import { parseJobText } from "./parsers/jobParser";
-import type { CvParseResult } from "./parsers/cvParser";
+import { parseCvText, type CvParseResult } from "./parsers/cvParser";
 import { generateJsonWithOllamaStrict } from "./llm/ollama";
 import {
   calculateFitScore,
@@ -10,6 +16,7 @@ import {
 } from "./scoring/fitScore";
 import { loadStoredCvFromStorage } from "./storage/userCv";
 import { loadUserConstraintsFromStorage } from "./storage/userConstraints";
+import { loadUserCorrectionsPromptBlock } from "./storage/userCorrections";
 import { loadUserPreferences } from "./storage/userPreferences";
 import {
   CV_CONTEXT_LIMITS,
@@ -223,6 +230,7 @@ type SemanticFitReview = {
   veto_reason: string | null;
   fit_score: number;
   mathematical_breakdown: string;
+  one_sentence_summary: string;
   narrative_summary: string;
   matched_skills: string[];
   missing_skills: string[];
@@ -342,6 +350,17 @@ function parseSemanticFitReviewPayload(
       ? o.narrative_summary.trim()
       : "";
 
+  let oneSentence =
+    typeof o.one_sentence_summary === "string" ? o.one_sentence_summary.trim() : "";
+  if (!oneSentence && narrative) {
+    const first = narrative.split(/(?<=[.!?])\s+/)[0]?.trim() ?? "";
+    if (first.length > 12) oneSentence = first;
+  }
+  if (!oneSentence) {
+    oneSentence = "Open Match analysis below for the full numeric breakdown.";
+  }
+  oneSentence = oneSentence.slice(0, 400);
+
   const seniorityMatch =
     typeof o.seniority_match === "boolean" ? o.seniority_match : baseline.seniority_match;
 
@@ -390,6 +409,7 @@ function parseSemanticFitReviewPayload(
     veto_reason: vetoReason,
     fit_score: fitScore,
     mathematical_breakdown: breakdown,
+    one_sentence_summary: oneSentence,
     narrative_summary: narrative,
     matched_skills: matchedLower,
     missing_skills: missingLower,
@@ -413,6 +433,7 @@ async function semanticFitScoreReviewWithLlm(params: {
   baseline: FitScoreResult;
   constraintHints: string[];
   model: string;
+  correctionsBlock: string;
 }): Promise<SemanticFitReview> {
   const offlineVeto = inferFallbackConstraintVeto(
     params.constraints,
@@ -430,12 +451,14 @@ async function semanticFitScoreReviewWithLlm(params: {
       : " (benefits/commitments omitted from metadata JSON to save tokens — not referenced in user constraints).";
 
   const prompt = `Task: fit JSON only. Output keys in this exact order (logic and veto before narrative):
-vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, narrative_summary, matched_skills, missing_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
+vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
 All strings EN.
 
 VETO (decide first): vetoed=true only on a hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason one clear EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
 
 score_components (REQUIRED when vetoed=false): {base_semantic:int, skill_overlap_delta:int, experience_delta:int, constraint_delta:int, advantage_bonus:int}. Integers. Formula: fit_score = clamp(round(base_semantic + skill_overlap_delta + experience_delta + constraint_delta + advantage_bonus), 0, 100). advantage_bonus >= 0. You MUST set fit_score exactly equal to that sum after clamp.
+
+one_sentence_summary: In addition to mathematical_breakdown, provide one concise English sentence for the user naming the single most important factor (e.g. "Great skill match but rejected due to contract type" or "Perfect seniority and location match"). This is not the math — it is the human headline.
 
 semantic_highlights: 3-5 of {phrase,sentiment:"positive"|"negative",reason}. phrase = exact copy from JOB_TEXT below (short). Pick phrases that moved score most.
 
@@ -472,6 +495,9 @@ JSON only.`;
   const data = await generateJsonWithOllamaStrict<Record<string, unknown>>(prompt, {
     model: params.model,
     role: "analysis",
+    ...(params.correctionsBlock.trim()
+      ? { systemAppend: params.correctionsBlock.trim() }
+      : {}),
   });
 
   return parseSemanticFitReviewPayload(data, params.baseline, offlineVeto);
@@ -497,6 +523,22 @@ export async function runPipelineDetailed(
   }
   const preferredLocation = preferredLocationRaw.length > 0 ? preferredLocationRaw : null;
 
+  const correctionsBlock = await loadUserCorrectionsPromptBlock();
+
+  const rawCvText = storedCv.raw_text ?? "";
+  const cacheKey = getCvParseCacheKey(rawCvText, model);
+  const cacheLabel = formatCvCacheLabel(storedCv.source_filename ?? null, cacheKey);
+  let cvParsed: CvParseResult;
+  const cachedCv = await readCvParseCache(cacheKey, rawCvText, model);
+  if (cachedCv) {
+    cvParsed = cachedCv;
+    console.log(`[Cache] CV parse hit for "${cacheLabel}"`);
+  } else {
+    console.log(`[Cache] CV parse miss for "${cacheLabel}" — running cvParser`);
+    cvParsed = await parseCvText(rawCvText, model);
+    await writeCvParseCache(cacheKey, rawCvText, model, cvParsed, storedCv.source_filename ?? null);
+  }
+
   const jobParsed = await parseJobText(
     input.job,
     model,
@@ -514,7 +556,6 @@ export async function runPipelineDetailed(
     0,
     JOB_TEXT_LIMITS.combinedJobForScoring,
   );
-  const cvParsed = storedCv.parsed;
   const userExperienceOverride = extractExperienceOverrideFromConstraints(constraints);
   const prunedCv = buildPrunedCvContext(storedCv.raw_text ?? "", cvParsed);
 
@@ -568,6 +609,7 @@ export async function runPipelineDetailed(
     baseline: score,
     constraintHints,
     model,
+    correctionsBlock,
   });
 
   const summaryPieces: string[] = [];
@@ -580,7 +622,7 @@ export async function runPipelineDetailed(
   const summary =
     summaryPieces.length > 0
       ? summaryPieces.join("\n\n")
-      : "See mathematical_breakdown for how this score was derived.";
+      : semanticReview.one_sentence_summary;
 
   const strengthHighlights = selectStrengthHighlights(
     cvParsed.core_stories,
@@ -599,6 +641,7 @@ export async function runPipelineDetailed(
       strength_highlights: strengthHighlights,
       seniority_match: semanticReview.seniority_match,
       summary,
+      one_sentence_summary: semanticReview.one_sentence_summary,
       mathematical_breakdown: semanticReview.mathematical_breakdown,
       vibe_warnings: semanticReview.vibe_warnings,
       semantic_highlights: semanticReview.semantic_highlights,

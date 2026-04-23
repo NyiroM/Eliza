@@ -13,6 +13,7 @@ type PipelineResponse = {
   missing_skills: string[];
   seniority_match: boolean;
   summary: string;
+  one_sentence_summary?: string;
   mathematical_breakdown?: string;
   vibe_warnings?: string[];
   semantic_highlights?: SemanticHighlight[];
@@ -404,16 +405,24 @@ export function App() {
             </div>
           ) : null}
 
-          <div className="mb-2 rounded border border-slate-600 bg-slate-900 p-2">
-            <p className="text-[10px] font-medium text-amber-200/90 mb-1">Match analysis</p>
-            <pre className="whitespace-pre-wrap text-[10px] text-slate-100 font-mono leading-snug max-h-40 overflow-y-auto">
+          <p className="mb-2 text-xs font-medium text-slate-200 leading-snug">
+            {result.one_sentence_summary ??
+              result.summary ??
+              "Open details below for the full numeric breakdown."}
+          </p>
+
+          <details className="mb-2 rounded border border-slate-600 bg-slate-900 p-2">
+            <summary className="cursor-pointer text-[10px] font-medium text-amber-200/90">
+              View details (breakdown)
+            </summary>
+            <pre className="mt-1 whitespace-pre-wrap text-[10px] text-slate-100 font-mono leading-snug max-h-40 overflow-y-auto">
               {result.mathematical_breakdown ?? "—"}
             </pre>
             <p className="mt-1 text-[9px] leading-snug text-slate-500">
               Headline score matches line 7; line 6 is verified when the API returns score components.
               {result.debug?.fit_score_reconciled_from_components ? " Adjusted this run." : ""}
             </p>
-          </div>
+          </details>
 
           {(result.vibe_warnings ?? []).length > 0 ? (
             <div className="mb-2 rounded border border-amber-800/50 bg-amber-950/20 p-2">
@@ -437,9 +446,10 @@ export function App() {
             <p className="text-xs text-slate-400">Critical gaps</p>
             <p className="text-sm">{result.missing_skills.join(", ") || "None"}</p>
           </div>
-          {result.summary ? (
+          {result.summary &&
+          result.summary !== (result.one_sentence_summary ?? "") ? (
             <div className="mb-3 border-t border-slate-700 pt-2">
-              <p className="text-[10px] text-slate-500 mb-0.5">Summary</p>
+              <p className="text-[10px] text-slate-500 mb-0.5">Notes</p>
               <p className="text-xs text-slate-300">{result.summary}</p>
             </div>
           ) : null}

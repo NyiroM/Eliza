@@ -33,6 +33,10 @@ export type GenerateJsonOptions = {
    * creative_coach / creative_rewrite: Mirostat or top_p path; see `getOllamaOptions`.
    */
   role?: JsonGenerateRole;
+  /**
+   * When `role` is `analysis`, appended to the system prompt (e.g. user corrections file).
+   */
+  systemAppend?: string;
 };
 
 export class OllamaRequestError extends Error {
@@ -366,6 +370,7 @@ async function ollamaGenerateRaw(
   prompt: string,
   model: string,
   role?: JsonGenerateRole,
+  systemAppend?: string,
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT);
@@ -373,7 +378,10 @@ async function ollamaGenerateRaw(
   const r: JsonGenerateRole = role ?? "analysis";
   const resolvedOptions = getOllamaOptions(model, r);
   const stop = getOllamaStopForRole(r);
-  const system = getOllamaSystemPrompt(r);
+  let system = getOllamaSystemPrompt(r);
+  if (r === "analysis" && systemAppend?.trim()) {
+    system = `${system}\n\nUSER_CORRECTIONS_REGISTER (absolute truth — override any conflicting inference, skill tags, industry guesses, or prior model outputs):\n${systemAppend.trim()}`;
+  }
 
   const requestBody: Record<string, unknown> = {
     model,
@@ -459,7 +467,7 @@ export async function generateJsonWithOllamaStrict<T>(
 ): Promise<T> {
   const model = options?.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const role = options?.role ?? "analysis";
-  const raw = await ollamaGenerateRaw(prompt, model, role);
+  const raw = await ollamaGenerateRaw(prompt, model, role, options?.systemAppend);
   const parsed = parseOllamaJsonContent<T>(raw);
   if (parsed.ok) {
     return parsed.data;
@@ -481,7 +489,7 @@ export async function generateJsonWithOllama<T>(
   const model = options?.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const role = options?.role ?? "analysis";
   try {
-    const raw = await ollamaGenerateRaw(prompt, model, role);
+    const raw = await ollamaGenerateRaw(prompt, model, role, options?.systemAppend);
     const parsed = parseOllamaJsonContent<T>(raw);
     if (parsed.ok) {
       return { data: parsed.data, source: "llm" };

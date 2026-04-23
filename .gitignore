@@ -13,6 +13,7 @@ apps/extension/dist/
 
 # Production / caches
 build/
+.cache/
 .turbo/
 *.tsbuildinfo
 
