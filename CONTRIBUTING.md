@@ -16,6 +16,16 @@ Thank you for your interest in improving ELIZA. This project is a small Next.js 
 - Run `npm run lint` when you touch TypeScript or React code.
 - Describe **what** changed and **why** in the PR description.
 
+## Documentation maintenance checklist
+
+When your change touches runtime defaults or user-facing behavior, update docs in the same PR:
+
+- **Version bump**: keep `package.json`, `package-lock.json`, and `CHANGELOG.md` aligned.
+- **Model/runtime defaults**: if default Ollama model changes, update `README.md` install/run examples.
+- **Scripts**: if npm scripts are added/renamed, update the scripts table in `README.md`.
+- **Major feature behavior**: document extraction/fallback/safety logic changes (for example Salary Oracle rules) in `README.md` and `CHANGELOG.md`.
+- **API response shape**: if `types/` contracts change, ensure dashboard/extension docs and examples still reflect actual fields.
+
 ## Extension
 
 The Chrome extension lives under `apps/extension/`. Build it with:

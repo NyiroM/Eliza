@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.24] — 2026-04-23
+
+### Added
+
+- Salary Oracle extraction hardening with **semantic proximity checks** (salary amounts must be near salary terms) and explicit **non-salary exclusion contexts** (employee count, country count, years, area-like units).
+- Compensation-aware salary response shape with source/currency metadata and structured base/bonus/benefits fields.
+- Additional guardrails in semantic scoring hints to avoid treating city names as social-isolation signals.
+
+### Changed
+
+- Salary extraction now enforces stricter monthly sanity checks for high-nominal currencies and applies day-rate normalization only when explicit day-rate markers exist.
+- Unlikely posted salaries now automatically **fallback to market benchmark (Hays/RAG)** instead of surfacing noisy values.
+- Documentation refreshed for v0.4.x defaults (`deepseek-r1:8b`, salary oracle scripts/behavior).
+
+### Fixed
+
+- Prevented hallucinated numeric entities (for example company employee counts) from being interpreted as monthly salary.
+
 ## [0.2.0] — 2026-04-22
 
 ### Added
@@ -33,3 +51,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
+[0.4.24]: https://github.com/NyiroM/Eliza/compare/v0.2.0...v0.4.24

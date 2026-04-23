@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
-import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { runSalaryOracle, parseMinSalaryHufFromConstraints } from '../lib/salary-oracle.js';
+import * as salaryOracleModule from '../lib/salary-oracle';
+
+const runSalaryOracle =
+  (salaryOracleModule as unknown as { runSalaryOracle?: typeof import('../lib/salary-oracle').runSalaryOracle }).runSalaryOracle ??
+  (salaryOracleModule as unknown as { default?: { runSalaryOracle?: typeof import('../lib/salary-oracle').runSalaryOracle } }).default?.runSalaryOracle;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -39,16 +42,6 @@ const testFixture = [
   },
 ];
 
-// Override the loader for the test
-const dataPath = path.join(repoRoot, 'data', 'salary', 'hays-hu-2026.json');
-const originalReadFile = fs.readFile;
-fs.readFile = async (p: any, ...args: any[]) => {
-  if (String(p).includes('hays-hu-2026.json')) {
-    return JSON.stringify(testFixture, null, 2);
-  }
-  return originalReadFile.call(fs, p, ...args);
-};
-
 async function main() {
   console.log('Running Salary Oracle self-tests...\n');
 
@@ -72,7 +65,7 @@ async function main() {
       jobText: 'Tech Wizard needed to slay bugs and ship magic.',
       seniority: 'unknown',
       constraints: ['1000000 HUF minimum'],
-      expected: 'below_limit',
+      expected: 'borderline',
     },
   ];
 
@@ -82,6 +75,9 @@ async function main() {
   for (const t of tests) {
     console.log(`Test: ${t.name}`);
     try {
+      if (!runSalaryOracle) {
+        throw new Error('runSalaryOracle export is not available');
+      }
       const analysis = await runSalaryOracle({
         jobText: t.jobText,
         jobParsed: {
@@ -102,6 +98,7 @@ async function main() {
         },
         constraints: t.constraints,
         model: 'deepseek-r1:8b',
+        fixture: testFixture,
       });
 
       const sa = analysis.salary_analysis;

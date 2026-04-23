@@ -27,6 +27,7 @@ type PipelineResult = {
   vibe_warnings?: string[];
   semantic_highlights?: SemanticHighlight[];
   constraint_veto?: boolean;
+  match_strength?: "Vetoed" | "Normal";
   analysis_model?: string;
   metadata_fit_badge?: "Location Conflict" | "Preference Match" | null;
   extracted_entities?: {
@@ -44,6 +45,34 @@ type PipelineResult = {
   application_bundle?: {
     cover_letter?: string;
     cv_rewrite_suggestions?: string[];
+  };
+  irrelevant_extra_skills?: string[];
+  salary_analysis?: {
+    hays_matched_label?: string;
+    confidence_score: number;
+    low_confidence?: boolean;
+    estimated_min: number;
+    estimated_max: number;
+    estimated_modus: number;
+    match_status: "above_limit" | "borderline" | "below_limit";
+    rationale: string;
+    source: "posted" | "market_benchmark";
+    currency: "USD" | "EUR" | "GBP" | "HUF" | "PLN" | "JPY";
+    base_salary: {
+      estimated_min: number;
+      estimated_max: number;
+      estimated_modus: number;
+      basis: "gross" | "net";
+    };
+    bonus_detected: boolean;
+    benefits_value: string | null;
+    normalized_net_estimate?: number;
+    comparison_currency: "USD" | "EUR" | "GBP" | "HUF" | "PLN" | "JPY";
+    normalized_estimated_min: number;
+    normalized_estimated_max: number;
+    normalized_estimated_modus: number;
+    conversion_applied: boolean;
+    exchange_rate_used?: string;
   };
   debug?: {
     fit_score_reconciled_from_components?: boolean;
@@ -118,6 +147,7 @@ export default function DashboardPage() {
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(1);
   const [targetLocation, setTargetLocation] = useState("");
+  const [preferredCurrency, setPreferredCurrency] = useState<string | null>(null);
   const [prefsLocationBusy, setPrefsLocationBusy] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [correctionDraft, setCorrectionDraft] = useState("");
@@ -178,9 +208,15 @@ export default function DashboardPage() {
   async function loadPreferredLocation() {
     try {
       const response = await fetch("/api/user-preferences");
-      const data = (await response.json()) as { preferred_location?: string | null };
+      const data = (await response.json()) as {
+        preferred_location?: string | null;
+        preferred_currency?: string | null;
+      };
       if (typeof data.preferred_location === "string" && data.preferred_location.trim()) {
         setTargetLocation(data.preferred_location.trim());
+      }
+      if (typeof data.preferred_currency === "string" && data.preferred_currency.trim()) {
+        setPreferredCurrency(data.preferred_currency.trim().toUpperCase());
       }
     } catch {
       /* ignore */
@@ -275,6 +311,10 @@ export default function DashboardPage() {
       setConstraintsBusy(false);
     }
   }, []);
+
+  useEffect(() => {
+    void loadConstraints();
+  }, [loadConstraints]);
 
   const runAnalysis = useCallback(async () => {
     if (!status.loaded) {
@@ -454,6 +494,18 @@ export default function DashboardPage() {
     }
   }
 
+  function formatSalaryValue(amount: number, currency: string) {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 0,
+      }).format(amount);
+    } catch {
+      return `${amount.toLocaleString()} ${currency}`;
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-8">
@@ -615,15 +667,6 @@ export default function DashboardPage() {
             >
               Save Constraint
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                void loadConstraints();
-              }}
-              className="mt-2 ml-2 rounded-md bg-slate-700 px-4 py-2 text-sm hover:bg-slate-600"
-            >
-              Refresh Constraints
-            </button>
           </div>
             </section>
           </div>
@@ -639,7 +682,7 @@ export default function DashboardPage() {
             </p>
           ) : (
             <div className="space-y-5">
-              <div className="flex flex-col items-center gap-5 border-b border-slate-800 pb-5 sm:flex-row sm:items-start sm:justify-between">
+              <div className="grid gap-5 border-b border-slate-800 pb-5 md:grid-cols-[auto,1fr] xl:grid-cols-[auto,1fr,300px]">
                 <FitGauge score={result.fit_score} vetoed={Boolean(result.constraint_veto)} />
                 <div className="min-w-0 flex-1 space-y-2 text-center sm:text-left">
                   {result.metadata_fit_badge ? (
@@ -652,6 +695,16 @@ export default function DashboardPage() {
                     >
                       {result.metadata_fit_badge}
                     </span>
+                  ) : null}
+                  {result.match_strength === "Vetoed" ? (
+                    <span className="ml-2 inline-flex rounded-full border border-red-700/80 bg-red-950/60 px-2.5 py-1 text-[11px] font-medium text-red-200">
+                      Vetoed
+                    </span>
+                  ) : null}
+                  {result.match_strength === "Vetoed" ? (
+                    <p className="text-xs text-red-300">
+                      {result.one_sentence_summary ?? result.summary}
+                    </p>
                   ) : null}
                   <p className="text-xs text-slate-500">
                     Model:{" "}
@@ -677,6 +730,111 @@ export default function DashboardPage() {
                     <p className="text-sm leading-relaxed text-slate-400">{result.summary}</p>
                   ) : null}
                 </div>
+                {result.salary_analysis ? (
+                  <section className="rounded-lg border border-slate-700 bg-slate-950/70 p-3 text-left">
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Salary Forecast
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Source:{" "}
+                      <span className="font-medium text-slate-200">
+                        {result.salary_analysis.source === "posted" ? "Posted in job ad" : "Market benchmark"}
+                      </span>
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Currency:{" "}
+                      <span className="font-medium text-slate-200">
+                        {result.salary_analysis.currency ?? preferredCurrency ?? "HUF"}
+                      </span>
+                    </p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      Typical:{" "}
+                      <span className="font-semibold text-white">
+                        {formatSalaryValue(
+                          result.salary_analysis.estimated_modus,
+                          result.salary_analysis.currency ?? preferredCurrency ?? "HUF",
+                        )}
+                      </span>
+                      {result.salary_analysis.conversion_applied ? (
+                        <span className="ml-1 text-xs text-slate-400">
+                          (~
+                          {formatSalaryValue(
+                            result.salary_analysis.normalized_estimated_modus,
+                            result.salary_analysis.comparison_currency,
+                          )}
+                          {result.salary_analysis.exchange_rate_used
+                            ? ` at ${result.salary_analysis.exchange_rate_used}`
+                            : ""}
+                          )
+                        </span>
+                      ) : null}
+                    </p>
+                    <div className="mt-2 rounded-md border border-slate-700 bg-slate-900/60 p-2 text-xs text-slate-300">
+                      <p>
+                        Base:{" "}
+                        <span className="font-medium text-slate-100">
+                          {formatSalaryValue(
+                            result.salary_analysis.base_salary.estimated_modus,
+                            result.salary_analysis.currency ?? preferredCurrency ?? "HUF",
+                          )}{" "}
+                          ({result.salary_analysis.base_salary.basis})
+                        </span>
+                      </p>
+                      <p className="mt-1">
+                        + Bonus:{" "}
+                        <span className="font-medium text-slate-100">
+                          {result.salary_analysis.bonus_detected ? "Yes" : "No"}
+                        </span>
+                      </p>
+                      <p className="mt-1">
+                        + Benefits:{" "}
+                        <span className="font-medium text-slate-100">
+                          {result.salary_analysis.benefits_value ?? "Not mentioned"}
+                        </span>
+                      </p>
+                      {result.salary_analysis.conversion_applied ? (
+                        <p className="mt-1">
+                          + Normalized:{" "}
+                          <span className="font-medium text-slate-100">
+                            {formatSalaryValue(
+                              result.salary_analysis.normalized_estimated_modus,
+                              result.salary_analysis.comparison_currency,
+                            )}{" "}
+                            ({result.salary_analysis.comparison_currency})
+                            {result.salary_analysis.exchange_rate_used
+                              ? ` at ${result.salary_analysis.exchange_rate_used}`
+                              : ""}
+                          </span>
+                        </p>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-300">{result.salary_analysis.rationale}</p>
+                    <div className="mt-2">
+                      {(() => {
+                        switch (result.salary_analysis.match_status) {
+                          case "above_limit":
+                            return (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">
+                                Above your minimum
+                              </span>
+                            );
+                          case "borderline":
+                            return (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+                                Borderline
+                              </span>
+                            );
+                          default:
+                            return (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800">
+                                Below your minimum
+                              </span>
+                            );
+                        }
+                      })()}
+                    </div>
+                  </section>
+                ) : null}
               </div>
 
               {result.constraint_veto ? (
@@ -979,50 +1137,6 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500">Updated: {constraints.updated_at}</p>
           ) : null}
         </section>
-
-        {/* Salary Forecast card (Hays 2026) */}
-        {result?.salary_analysis && (
-          <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 mt-6">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-2">Salary Forecast</h3>
-            <div className="space-y-2">
-              <p className="text-sm text-slate-200">{result.salary_analysis.rationale}</p>
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-medium text-slate-400">Match:</span>
-                {(() => {
-                  switch (result.salary_analysis.match_status) {
-                    case 'above_limit':
-                      return (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">
-                          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 8 8">
-                            <circle cx="4" cy="4" r="3" />
-                          </svg>
-                          Above your minimum
-                        </span>
-                      );
-                    case 'borderline':
-                      return (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
-                          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 8 8">
-                            <circle cx="4" cy="4" r="3" />
-                          </svg>
-                          Borderline
-                        </span>
-                      );
-                    case 'below_limit':
-                      return (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800">
-                          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 8 8">
-                            <circle cx="4" cy="4" r="3" />
-                          </svg>
-                          Below your minimum
-                        </span>
-                      );
-                  }
-                })()}
-              </div>
-            </div>
-          </section>
-        )}
 
         {message ? <p className="text-sm text-amber-300">{message}</p> : null}
       </div>

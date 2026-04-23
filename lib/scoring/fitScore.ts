@@ -72,6 +72,22 @@ function hasNoPmConstraint(constraints: string[]): boolean {
   });
 }
 
+function hasSocialPreferenceConstraint(constraints: string[]): boolean {
+  return constraints.some((constraint) => {
+    const t = constraint.toLowerCase();
+    return (
+      t.includes("work with people") ||
+      t.includes("people-oriented") ||
+      t.includes("social role") ||
+      t.includes("human interaction")
+    );
+  });
+}
+
+function isTrulySolitaryRole(jobText: string): boolean {
+  return /\b(forest ranger|lighthouse keeper)\b/i.test(jobText);
+}
+
 /**
  * Non-scoring signals for the semantic scoring LLM (no point values — hints only).
  */
@@ -99,6 +115,12 @@ export function collectConstraintSignalHints(constraints: string[], jobText: str
   if (hasDogDislikeConstraint && isDogFriendlyRole) {
     hints.push(
       "User dislikes dog-friendly workplaces; job mentions a dog-friendly environment.",
+    );
+  }
+
+  if (hasSocialPreferenceConstraint(constraints) && !isTrulySolitaryRole(jobText)) {
+    hints.push(
+      "Do not treat city/location names as social isolation. 'Work with people' is a role/team preference, not a geographic conflict unless the role is explicitly solitary.",
     );
   }
 

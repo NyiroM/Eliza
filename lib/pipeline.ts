@@ -25,6 +25,13 @@ import {
   SEMANTIC_HIGHLIGHT_LIMITS,
   SEMANTIC_SCORER_PROMPT_LIMITS,
 } from "../config/constants";
+
+// Helper to safely coerce unknown to string[]
+function strList(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean)
+    : [];
+}
 import type {
   PipelineContext,
   PipelineDetailedResult,
@@ -33,7 +40,7 @@ import type {
   ScoreComponents,
   SemanticHighlight,
 } from "../types/pipeline";
-import { runSalaryOracle } from "../lib/salary-oracle";
+import { runSalaryOracle } from "./salary-oracle";
 
 export type {
   PipelineContext,
@@ -305,17 +312,110 @@ function inferFallbackConstraintVeto(
   return { vetoed: false, veto_reason: null };
 }
 
+function detectNoCodeConstraint(constraints: string[]): boolean {
+  return constraints.some((constraint) =>
+    /\b(no[-\s]?code|cannot code|can't code|i cannot code|non[-\s]?coding)\b/i.test(constraint),
+  );
+}
+
+function detectProgrammingRequirement(
+  requiredSkills: string[],
+  jobText: string,
+): string | null {
+  const programmingSkills = [
+    "python",
+    "java",
+    "javascript",
+    "typescript",
+    "c",
+    "c++",
+    "c#",
+    "go",
+    "rust",
+    "ruby",
+    "php",
+    "kotlin",
+    "swift",
+  ];
+  const requiredSet = new Set(requiredSkills.map((s) => s.toLowerCase()));
+  for (const skill of programmingSkills) {
+    if (requiredSet.has(skill) || new RegExp(`\\b${skill.replace(/[+]/g, "\\+")}\\b`, "i").test(jobText)) {
+      return skill.toUpperCase();
+    }
+  }
+  return null;
+}
+
+function normalizeConstraintText(value: string): string {
+  return ` ${value.toLowerCase().replace(/[^a-z0-9+#/.\-\s]/g, " ").replace(/\s+/g, " ").trim()} `;
+}
+
+function hasNegativeConstraintSignal(value: string): boolean {
+  return /\b(no|cannot|can't|do not|don't|excluding|exclude|without|avoid|not)\b/i.test(value);
+}
+
+function detectUniversalNegativeConstraintConflict(
+  constraints: string[],
+  requiredItems: string[],
+): string | null {
+  if (!constraints.length || !requiredItems.length) return null;
+  const required = [...new Set(requiredItems.map((s) => s.trim()).filter(Boolean))].sort(
+    (a, b) => b.length - a.length,
+  );
+
+  for (const constraint of constraints) {
+    if (!hasNegativeConstraintSignal(constraint)) continue;
+    const normalizedConstraint = normalizeConstraintText(constraint);
+
+    for (const skill of required) {
+      const normalizedSkill = normalizeConstraintText(skill).trim();
+      if (normalizedSkill.length < 2) continue;
+
+      if (normalizedConstraint.includes(` ${normalizedSkill} `)) {
+        return skill;
+      }
+
+      const skillTokens = normalizedSkill.split(" ").filter((t) => t.length > 1);
+      if (skillTokens.length > 1) {
+        const allTokensPresent = skillTokens.every((token) =>
+          normalizedConstraint.includes(` ${token} `),
+        );
+        if (allTokensPresent) return skill;
+      }
+    }
+  }
+  return null;
+}
+
+function buildHardVetoReview(
+  baseline: FitScoreResult,
+  reason: string,
+): SemanticFitReview {
+  return {
+    vetoed: true,
+    veto_reason: reason,
+    fit_score: 0,
+    mathematical_breakdown: `VETO: ${reason}\nFinal Score: 0%.`,
+    one_sentence_summary: reason,
+    narrative_summary: reason,
+    matched_skills: [...new Set((baseline.matched_skills ?? []).map((s) => s.toLowerCase()))].sort(),
+    missing_skills: [...new Set((baseline.missing_skills ?? []).map((s) => s.toLowerCase()))].sort(),
+    irrelevant_extra_skills: [],
+    interview_prep: [],
+    seniority_match: baseline.seniority_match,
+    metadata_fit_badge: null,
+    vibe_warnings: [],
+    semantic_highlights: [],
+    fit_score_reconciled_from_components: false,
+  };
+}
+
 function parseSemanticFitReviewPayload(
   data: unknown,
   baseline: FitScoreResult,
   offlineVeto: { vetoed: boolean; veto_reason: string | null },
 ): SemanticFitReview {
   const o = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
-
-  const strList = (v: unknown): string[] =>
-    Array.isArray(v)
-      ? v.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean)
-      : [];
 
   let vetoed = Boolean(o.vetoed);
   let vetoReason =
@@ -372,7 +472,9 @@ function parseSemanticFitReviewPayload(
   if (badgeRaw === "Location Conflict" || badgeRaw === "Preference Match") {
     badge = badgeRaw;
   }
-  if (vetoed && !badge) badge = "Location Conflict";
+  if (vetoed && !badge && /location|region|country|city/i.test(vetoReason ?? "")) {
+    badge = "Location Conflict";
+  }
 
   const vibeWarnings = strList(o.vibe_warnings);
   const semanticHighlights = parseSemanticHighlights(o.semantic_highlights);
@@ -440,7 +542,7 @@ function parseSemanticFitReviewPayload(
     matched_skills: matchedLower,
     missing_skills: missingLower,
     irrelevant_extra_skills: irrelevantExtraSkills,
-    interview_prep,
+    interview_prep: [],
     seniority_match: seniorityMatch,
     metadata_fit_badge: badge,
     vibe_warnings: vibeWarnings,
@@ -462,6 +564,7 @@ async function semanticFitScoreReviewWithLlm(params: {
   constraintHints: string[];
   model: string;
   correctionsBlock: string;
+  role?: 'analysis' | 'extract_cv' | 'creative_coach' | 'creative_rewrite';
 }): Promise<SemanticFitReview> {
   const offlineVeto = inferFallbackConstraintVeto(
     params.constraints,
@@ -478,9 +581,9 @@ async function semanticFitScoreReviewWithLlm(params: {
       ? ""
       : " (benefits/commitments omitted from metadata JSON to save tokens — not referenced in user constraints).";
 
-  // Compute missingLower and irrelevantExtraSkills here for prompt safety
-  const matched = strList(o.matched_skills);
-  const missing = strList(o.missing_skills);
+  // Compute skill sets from baseline and job for prompt safety
+  const matched = strList(params.baseline.matched_skills ?? []);
+  const missing = strList(params.baseline.missing_skills ?? []);
   const matchedLower = [...new Set(matched.map((s) => s.toLowerCase()))].sort();
   const missingLower = [...new Set(missing.map((s) => s.toLowerCase()))].sort();
   const cvSkillsSet = new Set((params.baseline.matched_skills ?? []).map((s) => s.toLowerCase()));
@@ -500,7 +603,7 @@ All strings EN.
 CRITICAL_GAPS: ${JSON.stringify(missingLower)}.
 TRANSFERABLE_SKILLS (unused superpowers): ${JSON.stringify(irrelevantExtraSkills)}.
 
-VETO (decide first): vetoed=true only on a hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason one clear EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
+VETO (decide first): vetoed=true on any hard constraint clash (e.g. user bans a country/region and the job is based there, OR user explicitly excludes a required skill). fit_score=0, score_components all 0, veto_reason one clear EN sentence naming the exact conflict, breakdown ends Final Score: 0%. Else vetoed=false.
 
 score_components (REQUIRED when vetoed=false): {base_semantic:int, skill_overlap_delta:int, experience_delta:int, constraint_delta:int, advantage_bonus:int}. Integers. Formula: fit_score = clamp(round(base_semantic + skill_overlap_delta + experience_delta + constraint_delta + advantage_bonus), 0, 100). advantage_bonus >= 0. You MUST set fit_score exactly equal to that sum after clamp.
 
@@ -515,6 +618,7 @@ Optional skills: bonus only, never penalty.
 matched_skills/missing_skills: required-only; EN tokens OK.
 vibe_warnings: [] or short EN flags (vague pay, crunch, etc.).
 fit_score MUST equal the clamped sum of score_components and MUST match line 7 of mathematical_breakdown.
+Do NOT infer social isolation from a city name alone. "Work with people" is a social/role preference, not a location conflict, unless role is explicitly solitary (e.g., forest ranger, lighthouse keeper).
 
 JOB_METADATA${metaNote}: ${JSON.stringify(params.jobBoardMetadata)}
 CONSTRAINTS: ${JSON.stringify(params.constraints)} HINTS: ${JSON.stringify(params.constraintHints)}
@@ -650,30 +754,57 @@ export async function runPipelineDetailed(
   };
   const jobBoardMetadataForScorer = buildJobBoardMetadataForScorer(jobBoardMetadata, constraints);
 
-  const semanticReview = await semanticFitScoreReviewWithLlm({
+  const hardRequirementsForVeto = [
+    ...jobParsed.required_skills,
+    jobParsed.required_seniority,
+    jobParsed.education ?? "",
+    jobParsed.work_model,
+    jobParsed.job_type,
+  ].filter((v) => typeof v === "string" && v.trim().length > 0 && v.toLowerCase() !== "unknown");
+
+  const universalConstraintConflict = detectUniversalNegativeConstraintConflict(
     constraints,
-    preferredLocation,
-    jobTextEnglish: jobParsed.english_job_text,
+    hardRequirementsForVeto,
+  );
+  const noCodeConstraint = detectNoCodeConstraint(constraints);
+  const requiredProgrammingSkill = detectProgrammingRequirement(
+    jobParsed.required_skills,
     combinedJobText,
-    jobBoardMetadata: jobBoardMetadataForScorer,
-    cvSkills: cvParsed.skills,
-    coreStories: cvParsed.core_stories ?? [],
-    cvSnippet: prunedCv,
-    baseline: score,
-    constraintHints,
-    model,
-    correctionsBlock,
-    role: 'creative_coach',
-  });
+  );
+  const hardVetoReason =
+    universalConstraintConflict
+      ? `Vetoed: You explicitly excluded "${universalConstraintConflict}", but it is a required condition for this role.`
+      : noCodeConstraint && requiredProgrammingSkill
+      ? `Vetoed: This role requires ${requiredProgrammingSkill}, which you explicitly excluded.`
+      : null;
+
+  const semanticReview = hardVetoReason
+    ? buildHardVetoReview(score, hardVetoReason)
+    : await semanticFitScoreReviewWithLlm({
+        constraints,
+        preferredLocation,
+        jobTextEnglish: jobParsed.english_job_text,
+        combinedJobText,
+        jobBoardMetadata: jobBoardMetadataForScorer,
+        cvSkills: cvParsed.skills,
+        coreStories: cvParsed.core_stories ?? [],
+        cvSnippet: prunedCv,
+        baseline: score,
+        constraintHints,
+        model,
+        correctionsBlock,
+        role: 'analysis',
+      });
 
   // Run Salary Oracle (resilient)
-  let salaryOracleResult = { salary_analysis: null };
+  let salaryOracleResult: Awaited<ReturnType<typeof runSalaryOracle>> = { salary_analysis: null };
   try {
     salaryOracleResult = await runSalaryOracle({
       jobText: input.job,
       jobParsed,
       constraints,
       model,
+      preferredCurrency: userPrefs.preferred_currency,
     });
   } catch (err) {
     console.error('[Pipeline] Salary Oracle failed:', err);
@@ -706,8 +837,8 @@ export async function runPipelineDetailed(
   // Parse interview_prep safely (resilient)
   let interview_prep: Array<{ question: string; cheat_sheet: string }> = [];
   try {
-    interview_prep = Array.isArray(o.interview_prep)
-      ? o.interview_prep
+    interview_prep = Array.isArray(semanticReview.interview_prep)
+      ? semanticReview.interview_prep
           .filter((q: any) => q?.question && q?.cheat_sheet)
           .slice(0, 3)
           .map((q: any) => ({
@@ -732,6 +863,7 @@ export async function runPipelineDetailed(
       vibe_warnings: semanticReview.vibe_warnings,
       semantic_highlights: semanticReview.semantic_highlights,
       constraint_veto: semanticReview.vetoed,
+      match_strength: semanticReview.vetoed ? "Vetoed" : "Normal",
       salary_analysis,
       extracted_entities: {
         required_skills: jobParsed.required_skills,

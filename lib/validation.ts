@@ -98,6 +98,23 @@ export function validatePreferredLocationForStorage(
   return { ok: true, preferred_location: t.length > 0 ? t : null };
 }
 
+export function validatePreferredCurrencyForStorage(
+  raw: unknown,
+): { ok: true; preferred_currency: string | null } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) {
+    return { ok: true, preferred_currency: null };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: 'Field "preferred_currency" must be a string or null.' };
+  }
+  const t = raw.trim().toUpperCase();
+  if (!t) return { ok: true, preferred_currency: null };
+  if (!/^[A-Z]{3}$/.test(t)) {
+    return { ok: false, error: 'preferred_currency must be a 3-letter ISO code (e.g. USD, EUR).' };
+  }
+  return { ok: true, preferred_currency: t };
+}
+
 export function validateCvPdfUpload(file: File, bufferByteLength: number): { ok: true } | { ok: false; error: string } {
   if (file.type !== "application/pdf") {
     return { ok: false, error: "Only PDF files are supported for CV upload." };

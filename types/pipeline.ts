@@ -27,6 +27,57 @@ export type PipelineInput = {
   preferred_location?: string | null;
 };
 
+export type SalaryAnalysis = {
+  /** Hays role label matched (e.g., "Automation Engineer"). */
+  hays_matched_label?: string;
+  /** Confidence 0–1 in the match. */
+  confidence_score: number;
+  /** Low confidence flag (e.g., ambiguous title). */
+  low_confidence?: boolean;
+  /** Estimated minimum gross monthly salary (HUF). */
+  estimated_min: number;
+  /** Estimated maximum gross monthly salary (HUF). */
+  estimated_max: number;
+  /** Estimated typical (modus) gross monthly salary (HUF). */
+  estimated_modus: number;
+  /** Comparison vs user floor. */
+  match_status: "above_limit" | "borderline" | "below_limit";
+  /** Short rationale for the user. */
+  rationale: string;
+  /** Where salary came from: posted ad or benchmark lookup. */
+  source: "posted" | "market_benchmark";
+  /** ISO currency code used by this analysis. */
+  currency: "USD" | "EUR" | "GBP" | "HUF" | "PLN" | "JPY";
+  /** Structured base salary for compensation split. */
+  base_salary: {
+    estimated_min: number;
+    estimated_max: number;
+    estimated_modus: number;
+    basis: "gross" | "net";
+  };
+  /** True when bonus/commission/incentive signals are present. */
+  bonus_detected: boolean;
+  /** Qualitative benefits indicators (cafeteria, equity, insurance, etc.). */
+  benefits_value: string | null;
+  /** Estimated net from gross when normalization is needed. */
+  normalized_net_estimate?: number;
+  /** Currency used for floor comparison and normalized display. */
+  comparison_currency: "USD" | "EUR" | "GBP" | "HUF" | "PLN" | "JPY";
+  /** Normalized min/max/modus in comparison_currency. */
+  normalized_estimated_min: number;
+  normalized_estimated_max: number;
+  normalized_estimated_modus: number;
+  /** True when normalized values differ from original posting currency. */
+  conversion_applied: boolean;
+  /** Baseline rate used for normalization, e.g. "1 EUR = 400 HUF". */
+  exchange_rate_used?: string;
+};
+
+export type InterviewPrepItem = {
+  question: string;
+  cheat_sheet: string;
+};
+
 export type PipelineOutput = {
   fit_score: number;
   matched_skills: string[];
@@ -54,6 +105,8 @@ export type PipelineOutput = {
   metadata_fit_badge: "Location Conflict" | "Preference Match" | null;
   /** Hard veto: score forced to 0% by constraint violation. */
   constraint_veto: boolean;
+  /** Optional high-level label for output state. */
+  match_strength?: "Vetoed" | "Normal";
   /** LLM step-by-step score math (required when semantic scoring runs). */
   mathematical_breakdown: string;
   /** Hiring-post vagueness / risk signals from vibe scan (non-blocking). */
@@ -63,29 +116,9 @@ export type PipelineOutput = {
   /** Skills present in CV but not required by job (user’s unused superpowers). */
   irrelevant_extra_skills?: string[];
   /** Hays-2026 salary analysis for the role. */
-  salary_analysis?: {
-    /** Hays role label matched (e.g., "Automation Engineer"). */
-    hays_matched_label?: string;
-    /** Confidence 0–1 in the match. */
-    confidence_score: number;
-    /** Low confidence flag (e.g., ambiguous title). */
-    low_confidence?: boolean;
-    /** Estimated minimum gross monthly salary (HUF). */
-    estimated_min: number;
-    /** Estimated maximum gross monthly salary (HUF). */
-    estimated_max: number;
-    /** Estimated typical (modus) gross monthly salary (HUF). */
-    estimated_modus: number;
-    /** Comparison vs user floor. */
-    match_status: "above_limit" | "borderline" | "below_limit";
-    /** Short rationale for the user. */
-    rationale: string;
-  };
+  salary_analysis?: SalaryAnalysis | null;
   /** Interview prep: 3 targeted questions + Cheat Sheet answers based on critical gaps and transferable skills. */
-  interview_prep?: Array<{
-    question: string;
-    cheat_sheet: string;
-  }>;
+  interview_prep?: InterviewPrepItem[];
   debug: {
     analysis_source: "llm" | "fallback";
     cv_parser_source: "llm" | "fallback";
