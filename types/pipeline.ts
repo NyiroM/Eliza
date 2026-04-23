@@ -60,6 +60,8 @@ export type PipelineOutput = {
   vibe_warnings: string[];
   /** Job-text phrases that most influenced the score (for UI highlighter). */
   semantic_highlights: SemanticHighlight[];
+  /** Skills present in CV but not required by job (user’s unused superpowers). */
+  irrelevant_extra_skills?: string[];
   debug: {
     analysis_source: "llm" | "fallback";
     cv_parser_source: "llm" | "fallback";

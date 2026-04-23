@@ -1,6 +1,6 @@
 {
   "name": "eliza",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "private": true,
   "description": "AI-powered career co-pilot for local job-fit analysis with Ollama, Next.js, and TypeScript",
   "author": "NyiroM (https://github.com/NyiroM)",

@@ -777,11 +777,11 @@ export default function DashboardPage() {
                 </summary>
                 <div className="mt-3 space-y-4">
                   {/* Matched (green) */}
-                  {result.matched_skills.length > 0 && (
+                  {(result.matched_skills?.length ?? 0) > 0 && (
                     <div>
                       <p className="mb-1 text-xs font-medium text-green-300">Matched Skills</p>
                       <div className="flex flex-wrap gap-2">
-                        {result.matched_skills.map((skill) => (
+                        {(result.matched_skills ?? []).map((skill) => (
                           <span key={skill} className="inline-block rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800">
                             {skill}
                           </span>
@@ -791,11 +791,11 @@ export default function DashboardPage() {
                   )}
 
                   {/* Missing (red) */}
-                  {result.missing_skills.length > 0 && (
+                  {(result.missing_skills?.length ?? 0) > 0 && (
                     <div>
                       <p className="mb-1 text-xs font-medium text-rose-300">Critical Gaps</p>
                       <div className="flex flex-wrap gap-2">
-                        {result.missing_skills.map((skill) => (
+                        {(result.missing_skills ?? []).map((skill) => (
                           <span key={skill} className="inline-block rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800">
                             {skill}
                           </span>
@@ -805,11 +805,11 @@ export default function DashboardPage() {
                   )}
 
                   {/* Irrelevant extra (slate/blue) */}
-                  {result.irrelevant_extra_skills.length > 0 && (
+                  {(result.irrelevant_extra_skills?.length ?? 0) > 0 && (
                     <div>
                       <p className="mb-1 text-xs font-medium text-sky-300">Your Unused Superpowers</p>
                       <div className="flex flex-wrap gap-2">
-                        {result.irrelevant_extra_skills.map((skill) => (
+                        {(result.irrelevant_extra_skills ?? []).map((skill) => (
                           <span key={skill} className="inline-block rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-800">
                             {skill}
                           </span>
