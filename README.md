@@ -24,38 +24,38 @@ ELIZA follows a deterministic, pipeline-based flow from raw inputs to dashboard 
 ```mermaid
 flowchart TD
     %% Inputs
-    subgraph Inputs ["1. Bemeneti Adatok"]
-        J[Álláshirdetés szövege]
+    subgraph Inputs ["1. Input Data"]
+        J[Job Posting Text]
         C[CV / Core Stories]
-        U[Felhasználói korlátok & Bérigény]
+        U[User Constraints & Salary Target]
     end
 
     %% Extraction & Prep
-    subgraph Extraction ["2. Entitás kinyerés & Nyelvi előkészítés"]
-        EN{Nyelv detektálás}
-        TRANS[LLM Fordítás / Prep]
-        JE[Strukturált Job Entity: \n Skillek, Seniority, Béradatok]
+    subgraph Extraction ["2. Entity Extraction & Language Prep"]
+        EN{Language Detection}
+        TRANS[LLM Translation / Prep]
+        JE[Structured Job Entity: \n Skills, Seniority, Salary Data]
         
         J --> EN
-        EN -- Nem Angol --> TRANS
+        EN -- Non-English --> TRANS
         TRANS --> JE
-        EN -- Angol --> JE
-        C --> CP[CV Parser: \n Tapasztalat & Készségek]
+        EN -- English --> JE
+        C --> CP[CV Parser: \n Experience & Skills]
     end
 
     %% The Oracle Logic
     subgraph Oracle ["3. ELIZA Salary Oracle & RAG"]
         RAG[(Hays 2026 \n Market Database)]
-        EXT_SAL[Kinyert béradatok]
+        EXT_SAL[Extracted Salary Data]
         
         JE --> EXT_SAL
-        EXT_SAL -- Nincs adat --> RAG
+        EXT_SAL -- No Data Found --> RAG
         
-        NORM{Normalizáló Motor}
+        NORM{Normalization Engine}
         EXT_SAL --> NORM
         RAG --> NORM
         
-        CURR[Valuta váltás: \n EUR/GBP -> HUF]
+        CURR[Currency Conversion: \n EUR/GBP -> HUF]
         SCALE[Day-rate Scaling: \n 10k-150k range * 20]
         
         NORM --> CURR
@@ -63,7 +63,7 @@ flowchart TD
     end
 
     %% Scoring & Veto
-    subgraph Analysis ["4. Scoring & Veto Kapu"]
+    subgraph Analysis ["4. Scoring & Veto Gate"]
         SCO[Semantic Fit Scoring: \n DeepSeek-R1 / Qwen]
         VETO{VETO ENGINE}
         
@@ -72,12 +72,12 @@ flowchart TD
         CP --> SCO
         JE --> SCO
         
-        VETO -- Ütközés --> FAIL[Match Score: 0% \n Status: VETOED]
-        VETO -- Tiszta --> PASS[Végleges Scoring]
+        VETO -- Conflict --> FAIL[Match Score: 0% \n Status: VETOED]
+        VETO -- Clear --> PASS[Final Scoring]
     end
 
     %% Output
-    subgraph Output ["5. Strukturált Output"]
+    subgraph Output ["5. Structured Output"]
         UI[ELIZA Dashboard: \n Match Score, Gap Analysis, \n Salary Forecast & Veto Rationale]
     end
 
