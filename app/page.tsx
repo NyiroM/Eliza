@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
+import JobInputHighlighter from "@/app/components/JobInputHighlighter";
 import type { SemanticHighlight } from "@/types/pipeline";
 
 type UploadStatus = {
@@ -97,83 +98,6 @@ function FitGauge({ score, vetoed }: { score: number; vetoed: boolean }) {
   );
 }
 
-function JobTextWithHighlights({
-  text,
-  highlights,
-}: {
-  text: string;
-  highlights: SemanticHighlight[];
-}) {
-  if (!highlights.length) {
-    return null;
-  }
-  type Mark = { start: number; end: number; sentiment: "positive" | "negative"; reason: string };
-  const marks: Mark[] = [];
-  const lower = text.toLowerCase();
-  const sorted = [...highlights]
-    .filter((h) => h.phrase?.trim())
-    .sort((a, b) => b.phrase.trim().length - a.phrase.trim().length);
-  const used = new Array(text.length).fill(false);
-  for (const h of sorted) {
-    const p = h.phrase.trim();
-    let from = 0;
-    while (true) {
-      const idx = lower.indexOf(p.toLowerCase(), from);
-      if (idx === -1) break;
-      let overlap = false;
-      for (let i = idx; i < idx + p.length; i++) {
-        if (used[i]) {
-          overlap = true;
-          break;
-        }
-      }
-      if (!overlap) {
-        for (let i = idx; i < idx + p.length; i++) used[i] = true;
-        marks.push({
-          start: idx,
-          end: idx + p.length,
-          sentiment: h.sentiment,
-          reason: h.reason,
-        });
-      }
-      from = idx + 1;
-    }
-  }
-  marks.sort((a, b) => a.start - b.start);
-  const nodes: ReactNode[] = [];
-  let pos = 0;
-  let k = 0;
-  for (const m of marks) {
-    if (m.start < pos) continue;
-    if (m.start > pos) {
-      nodes.push(<span key={`t-${k++}`}>{text.slice(pos, m.start)}</span>);
-    }
-    const cls =
-      m.sentiment === "positive"
-        ? "bg-emerald-700/55 text-emerald-50 ring-1 ring-emerald-500/30"
-        : "bg-rose-800/55 text-rose-50 ring-1 ring-rose-500/35";
-    nodes.push(
-      <mark key={`m-${m.start}-${m.end}`} title={m.reason} className={`rounded px-0.5 ${cls}`}>
-        {text.slice(m.start, m.end)}
-      </mark>,
-    );
-    pos = m.end;
-  }
-  if (pos < text.length) {
-    nodes.push(<span key={`t-${k++}`}>{text.slice(pos)}</span>);
-  }
-
-  return (
-    <div className="space-y-1">
-      <p className="text-xs font-medium text-slate-400">Semantic highlights</p>
-      <p className="text-[11px] text-slate-500">Hover a mark for the model&apos;s rationale.</p>
-      <div className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-slate-700 bg-slate-950/80 p-3 text-sm leading-relaxed text-slate-200">
-        {nodes.length ? nodes : text}
-      </div>
-    </div>
-  );
-}
-
 export default function DashboardPage() {
   const [status, setStatus] = useState<UploadStatus>({ loaded: false });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -227,7 +151,12 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    void loadOllamaModels();
+    const timerId = window.setTimeout(() => {
+      void loadOllamaModels();
+    }, 0);
+    return () => {
+      window.clearTimeout(timerId);
+    };
   }, [loadOllamaModels]);
 
   useEffect(() => {
@@ -581,24 +510,13 @@ export default function DashboardPage() {
                 </button>
               </div>
 
-              <div>
-                <label htmlFor="job-description" className="text-sm font-medium text-slate-200">
-                  Job description
-                </label>
-                <textarea
-                  id="job-description"
-                  value={jobText}
-                  onChange={(event) => setJobText(event.target.value)}
-                  placeholder="Paste the full job posting here…"
-                  className="mt-1 min-h-[14rem] w-full rounded-md border border-slate-700 bg-slate-950 p-3 text-sm leading-relaxed md:min-h-[22rem]"
-                />
-              </div>
-              {result?.semantic_highlights?.length ? (
-                <JobTextWithHighlights
-                  text={jobText}
-                  highlights={result.semantic_highlights}
-                />
-              ) : null}
+              <JobInputHighlighter
+                id="job-description"
+                value={jobText}
+                onChange={setJobText}
+                highlights={result?.semantic_highlights ?? []}
+                placeholder="Paste the full job posting here…"
+              />
 
               <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
                 <label htmlFor="ollama-model" className="text-sm text-slate-300">
