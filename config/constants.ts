@@ -4,7 +4,7 @@
  */
 
 /** Default Ollama model tag when none is provided or discovery fails. */
-export const DEFAULT_OLLAMA_MODEL = "llama3";
+export const DEFAULT_OLLAMA_MODEL = "deepseek-r1:8b";
 
 /** Ollama client HTTP timeout (all `/api/*` calls): see `OLLAMA_TIMEOUT` in `lib/llm/ollama.ts`. */
 

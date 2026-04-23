@@ -64,7 +64,7 @@ flowchart LR
 1. **Job / CV** — You provide posting text and a stored CV (uploaded PDF).
 2. **Extraction** — **English-first:** a fast token-signal heuristic on job text and CV text decides whether to **skip** the LLM language/translation step. If confidence is low or the sample looks non-English (for example German orthography in the prefix), the pipeline runs **automatic translation prep**, then **structured entity extraction**. The CV path always extracts skills, seniority, and core stories.
 3. **Pruning** — A compact CV profile is built for the scorer (token budget, noise-stripped experience lines).
-4. **DeepSeek-R1 scoring** — Default stack targets **`deepseek-r1:8b`** (or any Ollama tag you select). A baseline literal score is merged with the LLM semantic review, **`score_components`**, and optional **veto** logic.
+4. **DeepSeek-R1 scoring** — Default stack targets **`llama3`** (or any Ollama tag you select). A baseline literal score is merged with the LLM semantic review, **`score_components`**, and optional **veto** logic.
 5. **UI mapping** — The Next.js dashboard and Chrome extension render fit gauge, breakdown, highlights, badges, and asset hooks.
 
 Shared TypeScript contracts live under **`types/`**; limits and defaults under **`config/constants.ts`**.
@@ -73,7 +73,7 @@ Shared TypeScript contracts live under **`types/`**; limits and defaults under *
 
 ## Benchmarks
 
-On a typical **16 GB VRAM** workstation with **`deepseek-r1:8b`** pulled in Ollama, a full dashboard analysis (including extraction, pruning, and semantic scoring) commonly finishes in **~15 seconds** wall time. Actual latency varies with GPU class, CPU fallback, context size, and whether the **English-first** heuristic skips the LLM translation prep for both job and CV samples.
+On a typical **16 GB VRAM** workstation with **`llama3`** pulled in Ollama, a full dashboard analysis (including extraction, pruning, and semantic scoring) commonly finishes in **~15 seconds** wall time. Actual latency varies with GPU class, CPU fallback, context size, and whether the **English-first** heuristic skips the LLM translation prep for both job and CV samples.
 
 ---
 
@@ -130,7 +130,7 @@ Start the Ollama daemon, then pull the recommended reasoning model:
 
 ```bash
 ollama serve
-ollama pull deepseek-r1:8b
+ollama pull llama3
 ```
 
 You can also pull a lighter default for smoke tests:
@@ -151,7 +151,7 @@ cp .env.example .env.local   # optional; see file for OLLAMA_HOST
 npm run dev
 ```
 
-Open **http://localhost:3000**, upload a **PDF CV**, paste a job description, pick **`deepseek-r1:8b`** (or another installed tag), and run analysis.
+Open **http://localhost:3000**, upload a **PDF CV**, paste a job description, pick **`llama3`** (or another installed tag), and run analysis.
 
 ### Environment
 

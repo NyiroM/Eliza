@@ -548,6 +548,11 @@ export async function runPipelineDetailed(
     { strictLlm: true },
   );
   const isEnglish = jobParsed.translation_skipped === true;
+  if (isEnglish === undefined || isEnglish === null) {
+    console.warn("[Backend] Language detection returned null/undefined; defaulting to English");
+    jobParsed.translation_skipped = true;
+    jobParsed.english_job_text = input.job;
+  }
   console.log(
     `[Backend] Language detection result: ${isEnglish ? "English" : "Translating..."}`,
   );
