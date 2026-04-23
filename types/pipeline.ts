@@ -81,6 +81,11 @@ export type PipelineOutput = {
     /** Short rationale for the user. */
     rationale: string;
   };
+  /** Interview prep: 3 targeted questions + Cheat Sheet answers based on critical gaps and transferable skills. */
+  interview_prep?: Array<{
+    question: string;
+    cheat_sheet: string;
+  }>;
   debug: {
     analysis_source: "llm" | "fallback";
     cv_parser_source: "llm" | "fallback";

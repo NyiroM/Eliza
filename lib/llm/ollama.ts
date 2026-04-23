@@ -78,8 +78,9 @@ const OLLAMA_ANALYSIS_SYSTEM = `${OLLAMA_JSON_ENGINE} ${OLLAMA_CYNICAL_AUDITOR}`
 /** CV structured extraction: strict grounding, no “auditor” tone */
 const OLLAMA_EXTRACT_CV_SYSTEM = `${OLLAMA_JSON_ENGINE} Extract only information clearly grounded in the CV text; do not invent roles, dates, employers, or skills.`;
 
-/** Cover letter: fluent, persuasive JSON output */
-const OLLAMA_CREATIVE_COACH_SYSTEM = `${OLLAMA_JSON_ENGINE} You are a professional career coach: warm, persuasive, human-sounding prose in the requested JSON fields—still strictly valid JSON and faithful to the facts provided (no invented employers, titles, or credentials).`;
+/** Creative Coach: interview prep with Cheat Sheet answers */
+const OLLAMA_CREATIVE_COACH_SYSTEM = `${OLLAMA_JSON_ENGINE}
+You are a professional career coach. Generate exactly 3 targeted interview questions based on the provided CRITICAL_GAPS and TRANSFERABLE_SKILLS. For each question, provide a concise Cheat Sheet answer leveraging the user's CV context. Keep questions concise and relevant to the job posting. Output strictly valid JSON with fields: questions: Array<{question: string, cheat_sheet: string}>. Do not invent skills or employers; use only provided CV context.`;
 
 /** CV bullet rewrite */
 const OLLAMA_CREATIVE_REWRITE_SYSTEM = `${OLLAMA_JSON_ENGINE} You are an expert CV editor: improve clarity and impact without inventing facts, metrics, or tools.`;

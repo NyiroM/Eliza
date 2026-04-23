@@ -379,6 +379,17 @@ function parseSemanticFitReviewPayload(
   const matchedLower = [...new Set(matched.map((s) => s.toLowerCase()))].sort();
   const missingLower = [...new Set(missing.map((s) => s.toLowerCase()))].sort();
 
+  // Parse interview prep if present
+  const interviewPrep = Array.isArray(o.interview_prep)
+    ? o.interview_prep
+        .filter((q: any) => q?.question && q?.cheat_sheet)
+        .slice(0, 3)
+        .map((q: any) => ({
+          question: String(q.question).trim(),
+          cheat_sheet: String(q.cheat_sheet).trim(),
+        }))
+    : [];
+
   // Compute irrelevant_extra_skills: skills present in CV but not required by job
   const cvSkillsSet = new Set((baseline.matched_skills ?? []).map((s) => s.toLowerCase()));
   const requiredSkillsSet = new Set(missingLower);
@@ -427,6 +438,7 @@ function parseSemanticFitReviewPayload(
     matched_skills: matchedLower,
     missing_skills: missingLower,
     irrelevant_extra_skills: irrelevantExtraSkills,
+    interview_prep,
     seniority_match: seniorityMatch,
     metadata_fit_badge: badge,
     vibe_warnings: vibeWarnings,
@@ -467,6 +479,9 @@ async function semanticFitScoreReviewWithLlm(params: {
   const prompt = `Task: fit JSON only. Output keys in this exact order (logic and veto before narrative):
 vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, irrelevant_extra_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
 All strings EN.
+
+CRITICAL_GAPS: ${JSON.stringify(missingLower)}.
+TRANSFERABLE_SKILLS (unused superpowers): ${JSON.stringify(irrelevantExtraSkills)}.`;
 
 VETO (decide first): vetoed=true only on a hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason one clear EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
 
@@ -510,7 +525,7 @@ JSON only.`;
   console.log("[Backend] Sending prompt to Ollama... (semantic fit scoring)");
   const data = await generateJsonWithOllamaStrict<Record<string, unknown>>(prompt, {
     model: params.model,
-    role: "analysis",
+    role: params.role ?? "analysis",
     ...(params.correctionsBlock.trim()
       ? { systemAppend: params.correctionsBlock.trim() }
       : {}),
@@ -631,15 +646,22 @@ export async function runPipelineDetailed(
     constraintHints,
     model,
     correctionsBlock,
+    role: 'creative_coach',
   });
 
   // Run Salary Oracle
-  const salaryOracleResult = await runSalaryOracle({
-    jobText: params.job,
-    jobParsed,
-    constraints,
-    model,
-  });
+  let salaryOracleResult;
+  try {
+    salaryOracleResult = await runSalaryOracle({
+      jobText: input.job,
+      jobParsed,
+      constraints,
+      model,
+    });
+  } catch (err) {
+    console.error('[Pipeline] Salary Oracle failed:', err);
+    salaryOracleResult = { salary_analysis: null };
+  }
 
   const summaryPieces: string[] = [];
   if (semanticReview.vetoed) {
@@ -662,8 +684,8 @@ export async function runPipelineDetailed(
       ? "llm"
       : "fallback";
 
-  // Attach salary analysis if present
-  const salary_analysis = salaryOracleResult.salary_analysis;
+  // Attach salary analysis (defensive: fallback to null if missing)
+  const salary_analysis = salaryOracleResult?.salary_analysis ?? null;
 
   return {
     result: {
