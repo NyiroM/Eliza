@@ -236,6 +236,7 @@ type SemanticFitReview = {
   matched_skills: string[];
   missing_skills: string[];
   irrelevant_extra_skills: string[];
+  interview_prep: Array<{ question: string; cheat_sheet: string }>;
   seniority_match: boolean;
   metadata_fit_badge: "Location Conflict" | "Preference Match" | null;
   vibe_warnings: string[];
@@ -477,11 +478,11 @@ async function semanticFitScoreReviewWithLlm(params: {
       : " (benefits/commitments omitted from metadata JSON to save tokens — not referenced in user constraints).";
 
   const prompt = `Task: fit JSON only. Output keys in this exact order (logic and veto before narrative):
-vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, irrelevant_extra_skills, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
+vetoed, veto_reason, score_components, fit_score, mathematical_breakdown, one_sentence_summary, narrative_summary, matched_skills, missing_skills, irrelevant_extra_skills, interview_prep, seniority_match, metadata_fit_badge, vibe_warnings, semantic_highlights
 All strings EN.
 
 CRITICAL_GAPS: ${JSON.stringify(missingLower)}.
-TRANSFERABLE_SKILLS (unused superpowers): ${JSON.stringify(irrelevantExtraSkills)}.`;
+TRANSFERABLE_SKILLS (unused superpowers): ${JSON.stringify(irrelevantExtraSkills)}.
 
 VETO (decide first): vetoed=true only on a hard constraint clash (e.g. user bans a country/region and the job is based there). fit_score=0, score_components all 0, veto_reason one clear EN sentence, breakdown ends Final Score: 0%. Else vetoed=false.
 
