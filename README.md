@@ -1,4 +1,4 @@
-# ELIZA: Empathetic Link for Intelligent Job Acquire
+# ELIZA: Empathetic Link for Intelligent (Z)Job Acquire
 
 **Local-first, deterministic job-fit copilot** for developers who want **transparent math**, not a mystery percentage. ELIZA is a **Copilot workflow**: it prioritizes quality, relevance, and user oversight over mass-automation. Paste a posting, compare it to your CV through a staged pipeline (parsing -> structuring -> matching -> scoring), then optionally draft application assets—all via **[Ollama](https://ollama.com)** on your machine.
 
