@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateCoverLetter } from "../../../lib/generators/coverLetter";
 import { generateCvRewriteSuggestionsFromText } from "../../../lib/generators/cvRewriter";
 import { selectStrengthHighlights } from "../../../lib/pipeline";
+import { resolveOllamaModel } from "../../../lib/storage/resolveOllamaModel";
 import { loadStoredCvFromStorage } from "../../../lib/storage/userCv";
 import { validateJobDescription, validateOllamaModelTag } from "../../../lib/validation";
 
@@ -42,13 +43,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: jobCheck.error }, { status: 400 });
   }
 
-  const rawModel =
-    typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : "llama3";
-  const modelCheck = validateOllamaModelTag(rawModel);
-  if (!modelCheck.ok) {
-    return NextResponse.json({ error: modelCheck.error }, { status: 400 });
+  const explicitModel = typeof body.model === "string" ? body.model.trim() : "";
+  let model: string;
+  if (explicitModel.length > 0) {
+    const modelCheck = validateOllamaModelTag(explicitModel);
+    if (!modelCheck.ok) {
+      return NextResponse.json({ error: modelCheck.error }, { status: 400 });
+    }
+    model = modelCheck.model;
+  } else {
+    model = await resolveOllamaModel(undefined);
   }
-  const model = modelCheck.model;
 
   const stored = await loadStoredCvFromStorage();
   const cvFromBody = typeof body.cv_text === "string" ? body.cv_text.trim() : "";

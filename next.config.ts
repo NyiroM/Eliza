@@ -20,7 +20,29 @@ function resolveProjectRoot(): string {
 const projectRoot = resolveProjectRoot();
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["playwright", "playwright-core"],
   transpilePackages: ["tailwindcss", "@tailwindcss/postcss"],
+  /**
+   * Dev only: suppress high-frequency / low-signal request lines (RSC root, domain JSON,
+   * discovery lists, pipeline POST timing) so errors and intentional `[discovery]` logs stand out.
+   */
+  logging: {
+    incomingRequests: {
+      ignore: [
+        /^\/$/,
+        /^\/api\/discovery\/progress$/,
+        /^\/api\/discovery\/settings$/,
+        /^\/api\/discovery\/matches$/,
+        /^\/api\/discovery\/reset-catalog$/,
+        /^\/api\/discovery\/reset-match-lists$/,
+        /^\/api\/domain\/skill-synonyms/,
+        /^\/api\/domain\/constraint-tactics/,
+        /^\/api\/user-constraints$/,
+        /^\/api\/ollama-models$/,
+        /^\/api\/pipeline/,
+      ],
+    },
+  },
   turbopack: {
     root: projectRoot,
     resolveAlias: {

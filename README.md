@@ -14,6 +14,26 @@
 - **Constraint-aware** — saved preferences and hard vetoes (including explicit negative constraints conflicting with required skills) surface in the dashboard and API.
 - **Salary Oracle intelligence** — posted salary extraction with strict validation, currency-aware parsing, total-compensation signals (base/bonus/benefits), and market fallback benchmarks.
 - **No cloud inference required** — PDF CV parsing and LLM calls stay on your network when Ollama runs locally.
+- **Discovery Hub** — optional **Indeed**, **LinkedIn**, and **Profession.hu** sync into a local catalog, queued fit evaluation against your CV, and a **New matches** list with veto-aware scoring (same pipeline as manual paste).
+
+---
+
+## Discovery Hub
+
+The dashboard **Discovery Hub** panel drives listing ingestion and batch evaluation:
+
+- **Providers** — toggle per source; sync pulls recent rows into a **local catalog** (deduped) using **Playwright** (Chromium) where the site needs a real browser.
+- **Keywords** — comma-separated search phrases; optional **Ollama**-suggested phrases you can approve into the active keyword set.
+- **Queue & progress** — jobs are evaluated with the same **pipeline** as a pasted posting; rows above your match threshold (and not vetoed) surface under **New matches**.
+- **API** — routes under **`app/api/discovery/`** (`sync`, `state`, `settings`, `matches`, `process-queue`, `progress`, …). Domain helpers for synonyms and constraint tactics live under **`app/api/domain/`**.
+
+**One-time setup for browser sync:** after `npm install`, install the Playwright browser bundle once:
+
+```bash
+npx playwright install chromium
+```
+
+Provider sites change often; sync may return HTTP errors or empty sets depending on region and automation policy. Use **manual job paste** for a guaranteed path through the pipeline.
 
 ---
 
@@ -99,7 +119,7 @@ flowchart TD
 3. **Pruning** — A compact CV profile is built for the scorer (token budget, noise-stripped experience lines).
 4. **DeepSeek-R1 scoring** — Default stack targets **`deepseek-r1:8b`** (or any Ollama tag you select). A baseline literal score is merged with the LLM semantic review, **`score_components`**, and hard-veto logic.
 5. **Salary Oracle** — Posted salary (when valid) is prioritized over benchmark lookup, with source tagging, currency, and compensation breakdown fields.
-6. **UI mapping** — The Next.js dashboard and Chrome extension render fit gauge, breakdown, highlights, badges, salary forecast, and asset hooks.
+6. **UI mapping** — The Next.js dashboard and Chrome extension render fit gauge, breakdown, highlights, badges, salary forecast, asset hooks, and **Discovery Hub** controls.
 
 Shared TypeScript contracts live under **`types/`**; limits and defaults under **`config/constants.ts`**.
 
@@ -119,6 +139,7 @@ On a typical **16 GB VRAM** workstation with **`deepseek-r1:8b`** pulled in Olla
 | Styling      | **Tailwind CSS** v4                          |
 | Local AI     | **Ollama** (local-first inference) — JSON-capable models (**deepseek-r1:8b**, **llama3**, similar tags) |
 | PDF          | **pdf2json** for CV text extraction          |
+| Discovery    | **Playwright** (Chromium) + **cheerio** where HTML parsing suffices |
 | Extension    | **Vite** + **React** (Chrome MV3 side panel) |
 
 ---
@@ -127,13 +148,20 @@ On a typical **16 GB VRAM** workstation with **`deepseek-r1:8b`** pulled in Olla
 
 | Path | Purpose |
 |------|---------|
-| `app/` | Routes, dashboard UI, API route handlers |
-| `lib/` | Pipeline, parsers, scoring, Ollama client, storage helpers |
-| `types/` | Shared API and domain types (`PipelineOutput`, `JobParseResult`, …) |
+| `app/` | App Router pages, dashboard UI, API route handlers |
+| `app/api/discovery/` | Discovery Hub sync, queue, matches, settings, keyword suggestions |
+| `app/api/domain/` | Skill synonym and constraint-tactic JSON used by parsers and storage |
+| `lib/` | Ollama client, parsers, generators, validation, storage |
+| `lib/pipeline/` | Staged pipeline implementation (invoked from `lib/pipeline.ts`) |
+| `lib/discovery/` | Provider fetchers, catalog, queue, Playwright helpers |
+| `lib/cv/`, `lib/benchmark/`, `lib/logging/` | CV helpers, optional stress benchmarks, structured logs |
+| `scripts/` | Verification and tuning scripts (`*.mts`) |
+| `types/` | Shared contracts (`PipelineOutput`, `discovery`, …) |
 | `config/constants.ts` | Central limits, timeouts, default model tag |
 | `apps/extension/` | Chrome extension (`npm run build` → `dist/`) |
+| `benchmarks/` | Default output directory for `npm run benchmark:ollama-tuning` (artifacts gitignored) |
 
-User data (CV, constraints) is written under **`/storage/`** at the project root (gitignored).
+User data (CV, constraints, discovery catalog) is written under **`/storage/`** at the project root (gitignored).
 
 ---
 
@@ -142,6 +170,7 @@ User data (CV, constraints) is written under **`/storage/`** at the project root
 - **Node.js** 20+
 - **npm**
 - **[Ollama](https://ollama.com)** installed and on your **`PATH`** (so the Next.js server can run `ollama list`)
+- **Discovery Hub only:** Chromium for Playwright — run **`npx playwright install chromium`** once after installing npm dependencies
 
 ---
 
@@ -213,6 +242,11 @@ Load **`apps/extension/dist`** as an unpacked extension. Set **`VITE_ELIZA_API_U
 | `npm run start` | Production server |
 | `npm run lint` | ESLint |
 | `npm run test:salary-oracle` | Salary Oracle self-test suite (fixture-based) |
+| `npm run debug:profession-microsteps` | Scripted Profession.hu Playwright microsteps (debug) |
+| `npm run test:profession-search` | Integration check for Profession.hu search flow |
+| `npm run test:indeed-job-url` | Indeed job URL / listing assumptions verifier |
+| `npm run test:job-id-canonicalization` | Job id canonicalization verifier |
+| `npm run benchmark:ollama-tuning` | Local Ollama matrix tuning; writes under **`benchmarks/`** (ignored by git) |
 | `npx tsc --noEmit` | Typecheck (also run in CI on PRs to `main`) |
 
 ---

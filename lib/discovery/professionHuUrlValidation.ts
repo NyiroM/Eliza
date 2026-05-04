@@ -1,0 +1,72 @@
+// lib/discovery/professionHuUrlValidation.ts — Profession.hu listing URL must reflect the intended search.
+
+function norm(s: string): string {
+  return s.normalize("NFC").trim().toLowerCase();
+}
+
+/**
+ * SERP URLs like /allasok/1,0,0,{slug}%40{n}%40{n}?keywordsearch encode the free-text query in the path
+ * (slug is URI-encoded; trailing @digits@digits is Profession's own suffix).
+ */
+function phraseFromProfessionKeywordsearchPath(pathname: string): string | null {
+  const path = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  const m = path.match(/^\/allasok\/\d+,\d+,\d+,(.+)$/);
+  if (!m) return null;
+  const rawTail = m[1];
+  try {
+    const decoded = decodeURIComponent(rawTail.replace(/\+/g, " "));
+    const stripped = decoded.replace(/@\d+@\d+$/u, "").trim();
+    return stripped || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseProfessionUrl(pageUrl: string): URL | null {
+  try {
+    return new URL(pageUrl);
+  } catch {
+    return null;
+  }
+}
+
+/** True when Profession listing URL is the generic homepage with no search query. */
+export function isBareProfessionAllasokListing(pageUrl: string): boolean {
+  const u = parseProfessionUrl(pageUrl);
+  if (!u) return true;
+  const host = u.hostname.replace(/^www\./, "");
+  if (host !== "profession.hu") return false;
+  const path = (u.pathname.endsWith("/") ? u.pathname.slice(0, -1) : u.pathname) || "/";
+  const listingOnly =
+    path === "/allasok" || path === "/allasok/1" || /^\/allasok\/\d+$/.test(path);
+  if (!listingOnly) return false;
+  const ap = u.searchParams.get("adv_pattern");
+  const kw = u.searchParams.get("keyword");
+  return (ap == null || ap.trim() === "") && (kw == null || kw.trim() === "");
+}
+
+/**
+ * After navigation, the address bar must carry the search phrase as adv_pattern or keyword
+ * (decoded match, NFC-normalised).
+ */
+export function professionListingUrlReflectsKeyword(pageUrl: string, expectedKeyword: string): boolean {
+  const want = norm(expectedKeyword);
+  if (!want) return true;
+  const u = parseProfessionUrl(pageUrl);
+  if (!u) return false;
+  const ap = u.searchParams.get("adv_pattern");
+  const kwp = u.searchParams.get("keyword");
+  if (ap != null && norm(ap) === want) return true;
+  if (kwp != null && norm(kwp) === want) return true;
+  const pathPhrase = phraseFromProfessionKeywordsearchPath(u.pathname);
+  if (pathPhrase != null && norm(pathPhrase) === want) return true;
+  return false;
+}
+
+export function professionSearchNavigationFailureReason(pageUrl: string, expectedKeyword: string): string | null {
+  if (professionListingUrlReflectsKeyword(pageUrl, expectedKeyword)) return null;
+  if (isBareProfessionAllasokListing(pageUrl)) {
+    return "redirected to base Profession.hu listing without adv_pattern/keyword";
+  }
+  return "URL missing matching adv_pattern or keyword for this search phrase";
+}

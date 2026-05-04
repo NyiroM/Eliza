@@ -1,3 +1,4 @@
+import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
 import { CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
 
@@ -62,9 +63,9 @@ function sanitizeRewriterResult(result: unknown, fallback: string[]): string[] {
 export async function generateCvRewriteSuggestionsFromText(
   cvText: string,
   missingSkills: string[],
-  ollamaModel = "llama3",
+  ollamaModel = DEFAULT_OLLAMA_MODEL,
 ): Promise<CvRewriteResult> {
-  const model = ollamaModel.trim() || "llama3";
+  const model = ollamaModel.trim() || DEFAULT_OLLAMA_MODEL;
   const originalBullets = extractBulletsFromCvText(cvText);
   const fallbackBullets = fallbackRewrite({
     original_bullets: originalBullets,

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { appendPendingSynonymSuggestions } from "../../../lib/storage/skillSynonyms";
+import { suggestSkillSynonymPairsFromCv } from "../../../lib/skillSynonyms/suggestFromCv";
 import {
   hasStoredCv,
   loadStoredCvFromStorage,
   parseAndStoreCvFromPdfBuffer,
 } from "../../../lib/storage/userCv";
+import { resolveOllamaModel } from "../../../lib/storage/resolveOllamaModel";
 import { validateCvPdfUpload, validateOllamaModelTag } from "../../../lib/validation";
 
 export async function GET() {
@@ -13,11 +16,13 @@ export async function GET() {
   }
 
   const stored = await loadStoredCvFromStorage();
+  const skills = stored?.parsed.skills ?? [];
   return NextResponse.json(
     {
       loaded: true,
       uploaded_at: stored?.uploaded_at ?? null,
-      skills_count: stored?.parsed.skills.length ?? 0,
+      skills_count: skills.length,
+      skills: skills.slice(0, 200),
     },
     { status: 200 },
   );
@@ -46,13 +51,17 @@ export async function POST(request: NextRequest) {
   }
 
   const modelField = formData.get("model");
-  const rawModel =
-    typeof modelField === "string" && modelField.trim().length > 0 ? modelField.trim() : "llama3";
-  const modelCheck = validateOllamaModelTag(rawModel);
-  if (!modelCheck.ok) {
-    return NextResponse.json({ error: modelCheck.error }, { status: 400 });
+  const explicit = typeof modelField === "string" ? modelField.trim() : "";
+  let model: string;
+  if (explicit.length > 0) {
+    const modelCheck = validateOllamaModelTag(explicit);
+    if (!modelCheck.ok) {
+      return NextResponse.json({ error: modelCheck.error }, { status: 400 });
+    }
+    model = modelCheck.model;
+  } else {
+    model = await resolveOllamaModel(undefined);
   }
-  const model = modelCheck.model;
 
   let stored;
   try {
@@ -64,11 +73,37 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let synonym_suggestions_added = 0;
+  let synonym_suggestions_pending_total = 0;
+  let synonym_llm_proposed: { from: string; to: string }[] = [];
+  let synonym_llm_rationale: string | null = null;
+  let synonym_suggestions_error = false;
+  try {
+    const suggested = await suggestSkillSynonymPairsFromCv({
+      cvText: stored.raw_text,
+      skills: stored.parsed.skills,
+      model,
+    });
+    synonym_llm_proposed = suggested.pairs.map((p) => ({ from: p.from, to: p.to }));
+    synonym_llm_rationale = suggested.rationale.length > 0 ? suggested.rationale : null;
+    const merged = await appendPendingSynonymSuggestions(suggested.pairs);
+    synonym_suggestions_added = merged.added;
+    synonym_suggestions_pending_total = merged.pending_count;
+  } catch (err) {
+    synonym_suggestions_error = true;
+    console.error("[upload-cv] skill synonym suggestions failed:", err);
+  }
+
   return NextResponse.json(
     {
       loaded: true,
       uploaded_at: stored.uploaded_at,
       parsed: stored.parsed,
+      synonym_suggestions_added,
+      synonym_suggestions_pending_total,
+      synonym_llm_proposed,
+      synonym_llm_rationale,
+      synonym_suggestions_error,
     },
     { status: 200 },
   );

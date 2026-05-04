@@ -3,6 +3,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as salaryOracleModule from '../lib/salary-oracle';
+import type { JobParseResult } from '../types/job';
 
 const runSalaryOracle =
   (salaryOracleModule as unknown as { runSalaryOracle?: typeof import('../lib/salary-oracle').runSalaryOracle }).runSalaryOracle ??
@@ -84,7 +85,7 @@ async function main() {
           required_skills: [],
           optional_skills: [],
           estimated_salary: null,
-          required_seniority: t.seniority as any,
+          required_seniority: t.seniority as JobParseResult['required_seniority'],
           experience_years: null,
           education: null,
           job_location: null,

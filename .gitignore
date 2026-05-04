@@ -23,6 +23,11 @@ build/
 # Testing
 coverage/
 
+# Benchmark / tuning output (local paths, scraped job text, model matrix dumps)
+benchmarks/*.json
+benchmarks/*.log
+verify-discovery-hub.log.txt
+
 # Environment (commit .env.example; ignore real secrets)
 .env*
 !.env.example

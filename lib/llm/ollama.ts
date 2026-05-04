@@ -1,7 +1,8 @@
 // Eliza Engine v0.3 - Model-specific tuning & Loop Protection
 
 import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
-import { CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
+import { extractCompleteJSON } from "./extractCompleteJSON";
+import { isBackendLlmVerboseLog } from "../logging/backendLlmVerbose";
 import { redactSensitiveData } from "../security/redactSensitiveData";
 
 /** Single ceiling for every Ollama HTTP call from this module (generate + tags). */
@@ -35,7 +36,7 @@ export type JsonGenerateRole =
   | "creative_rewrite";
 
 export type GenerateJsonOptions = {
-  /** Ollama model name (must exist locally). Default: llama3 */
+  /** Ollama model name (must exist locally). Default: app `DEFAULT_OLLAMA_MODEL` when omitted. */
   model?: string;
   /**
    * analysis: analytical consistency (low temperature).
@@ -55,6 +56,13 @@ export type GenerateJsonOptions = {
   top_k?: number;
   repeat_penalty?: number;
   num_predict?: number;
+  /** Override default `OLLAMA_NUM_CTX` for `/api/generate` options. */
+  num_ctx?: number;
+  /**
+   * Ollama `/api/generate` root `format`: `"json"` or a JSON Schema object (Ollama >= 0.1.30).
+   * When omitted, defaults to `"json"` (callers that need schema must set this explicitly).
+   */
+  ollamaFormat?: "json" | Record<string, unknown>;
 };
 
 export class OllamaRequestError extends Error {
@@ -117,7 +125,7 @@ function isQwen25Family(modelLower: string): boolean {
 }
 
 function isGemmaModel(modelLower: string): boolean {
-  return /\bgemma\b/i.test(modelLower);
+  return /\bgemma/i.test(modelLower);
 }
 
 /** Models where Mirostat tends to behave poorly — fall back to top_p + temperature. */
@@ -125,7 +133,7 @@ function creativePrefersClassicSampling(modelLower: string): boolean {
   return /embed|embedding|rerank|clip|vl-|vision|mm-/i.test(modelLower);
 }
 
-function getOllamaSystemPrompt(role: JsonGenerateRole): string {
+export function getOllamaSystemPrompt(role: JsonGenerateRole): string {
   switch (role) {
     case "creative_coach":
       return OLLAMA_CREATIVE_COACH_SYSTEM;
@@ -140,13 +148,12 @@ function getOllamaSystemPrompt(role: JsonGenerateRole): string {
 }
 
 /**
- * Builds the `options` object for Ollama `/api/generate`: static `num_ctx: 16384`, `format: "json"`,
- * and a low default `temperature: 0.1`. All other sampling parameters are optional and fall back to model defaults.
+ * Builds the `options` object for Ollama `/api/generate`: `num_ctx`, sampling.
+ * JSON mode is set only at the request root as `format: "json"` (see `ollamaGenerateRaw`).
  */
 export function getOllamaOptions(model: string, role: JsonGenerateRole, options?: GenerateJsonOptions): Record<string, unknown> {
   const opts: Record<string, unknown> = {
-    num_ctx: NUM_CTX_GLOBAL,
-    format: "json",
+    num_ctx: options?.num_ctx ?? NUM_CTX_GLOBAL,
     temperature: options?.temperature ?? OLLAMA_DEFAULT_TEMPERATURE,
     num_predict: options?.num_predict ?? OLLAMA_MAX_PREDICT,
   };
@@ -163,32 +170,85 @@ export function getOllamaStopForRole(role: JsonGenerateRole): string[] | undefin
   return isStrictRole(role) ? ["\n}\n", "\n}\r\n"] : undefined;
 }
 
-/**
- * Strips DeepSeek-R1-style thinking blocks, then applies the "golden JSON" slice (first `{` through last `}`).
- * Exported for tests and any caller that post-processes Ollama text.
- */
-export function cleanOllamaResponse(raw: string): string {
-  let thinkingRemovedChars = 0;
-  const withoutThinking = raw.replace(
-    /<think>\s*[\s\S]*?<\/redacted_thinking>/gi,
-    (block) => {
-      thinkingRemovedChars += block.length;
-      return "";
-    },
-  );
-  if (thinkingRemovedChars > 0) {
-    console.log(`[Backend] Thinking block removed: ${thinkingRemovedChars} characters.`);
+/** JSON Schema for job–CV relevance scoring (Ollama `format` object). */
+export const RELEVANCE_SCORE_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    relevance_score: { type: "number", minimum: 0, maximum: 100 },
+    decision: { type: "string", enum: ["YES", "NO", "MAYBE"] },
+    reasoning_summary: { type: "string", maxLength: 500 },
+  },
+  required: ["relevance_score", "decision", "reasoning_summary"],
+};
+
+/** Schema-capable families for relevance tuning; others use `format: "json"`. */
+export function getRelevanceScoreOllamaFormat(model: string): "json" | Record<string, unknown> {
+  const m = model.toLowerCase();
+  if (isLlama31_8B(m) || isGemmaModel(m) || isQwen25Family(m)) {
+    return RELEVANCE_SCORE_JSON_SCHEMA;
   }
-  const s = withoutThinking.trim();
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start === -1 || end === -1 || end < start) {
-    return s;
-  }
-  return s.slice(start, end + 1).trim();
+  return "json";
 }
 
-function parseOllamaJsonContent<T>(raw: string): { ok: true; data: T } | { ok: false; cleaned: string; message: string } {
+/**
+ * Strips reasoning blocks and markdown JSON fences, then extracts the first balanced `{`…`}`
+ * JSON object (string-aware). Falls back to returning trimmed text if no balanced object exists.
+ */
+export function cleanOllamaResponse(raw: string): string {
+  let strippedChars = 0;
+  const countStrip = (re: RegExp, src: string): string =>
+    src.replace(re, (block) => {
+      strippedChars += block.length;
+      return "";
+    });
+
+  const redactedThinkingTag = "redacted" + "_" + "thinking";
+  let s = raw;
+  s = countStrip(new RegExp(`<${redactedThinkingTag}>\\s*[\\s\\S]*?<\\/${redactedThinkingTag}>`, "gi"), s);
+  const thinkTag = "th" + "ink";
+  s = countStrip(new RegExp(`<${thinkTag}>\\s*[\\s\\S]*?<\\/${thinkTag}>`, "gi"), s);
+  if (strippedChars > 0 && isBackendLlmVerboseLog()) {
+    console.log(`[Backend] Reasoning/thinking blocks removed: ${strippedChars} characters.`);
+  }
+
+  s = s.trim();
+  const fence = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```\s*$/i.exec(s);
+  if (fence) {
+    s = fence[1].trim();
+  } else {
+    s = s.replace(/^```(?:json)?\s*\r?\n?/i, "").replace(/\r?\n?```\s*$/i, "");
+  }
+
+  s = s.trim();
+  const balanced = extractCompleteJSON(s);
+  if (balanced !== null) {
+    return balanced.trim();
+  }
+  return s;
+}
+
+/** DeepSeek-R1-style: append a "JSON output:" cue at the end of the user prompt. */
+const REASONING_STRICT_JSON_TAIL = `
+
+---
+Return exactly one JSON object. Your next character must be {. End immediately after the final } with no trailing commentary or markdown fences.
+
+JSON output:
+`;
+
+function maybeAppendReasoningJsonTail(prompt: string, model: string, role: JsonGenerateRole): string {
+  if (!isReasoningR1Family(model.toLowerCase()) || !isStrictRole(role)) {
+    return prompt;
+  }
+  return `${prompt.trimEnd()}${REASONING_STRICT_JSON_TAIL}`;
+}
+
+/** Exported for benchmarks: same tail cue as strict analysis calls for R1-style models. */
+export function appendAnalysisReasoningJsonCue(prompt: string, model: string): string {
+  return maybeAppendReasoningJsonTail(prompt, model, "analysis");
+}
+
+export function parseOllamaJsonContent<T>(raw: string): { ok: true; data: T } | { ok: false; cleaned: string; message: string } {
   const cleaned = cleanOllamaResponse(raw);
   try {
     return { ok: true, data: JSON.parse(cleaned) as T };
@@ -200,7 +260,7 @@ function parseOllamaJsonContent<T>(raw: string): { ok: true; data: T } | { ok: f
 
 function logUnparseableOllamaJson(raw: string, cleaned: string, message: string): void {
   console.error(
-    "[Ollama Error] JSON.parse failed after cleanOllamaResponse (thinking stripped, golden {…} slice).",
+    "[Ollama Error] JSON.parse failed after cleanOllamaResponse (thinking blocks, markdown fences removed; balanced {...} extract).",
     "Parse message:",
     redactSensitiveData(message),
   );
@@ -365,39 +425,47 @@ async function ollamaGenerateRaw(
   const url = getOllamaGenerateUrl();
   const r: JsonGenerateRole = role ?? "analysis";
   const resolvedOptions = getOllamaOptions(model, r, options);
+  const gbnf = process.env.OLLAMA_JSON_GBNF_GRAMMAR?.trim();
+  if (gbnf) {
+    (resolvedOptions as Record<string, unknown>).grammar = gbnf;
+  }
   const stop = getOllamaStopForRole(r);
   let system = getOllamaSystemPrompt(r);
   if (r === "analysis" && systemAppend?.trim()) {
     system = `${system}\n\nUSER_CORRECTIONS_REGISTER (absolute truth — override any conflicting inference, skill tags, industry guesses, or prior model outputs):\n${systemAppend.trim()}`;
   }
 
+  const promptForModel = maybeAppendReasoningJsonTail(prompt, model, r);
+
   const requestBody: Record<string, unknown> = {
     model,
     stream: false,
-    format: "json",
+    format: options?.ollamaFormat ?? "json",
     system,
     options: resolvedOptions,
-    prompt,
+    prompt: promptForModel,
   };
   if (stop !== undefined) {
     requestBody.stop = stop;
   }
 
   try {
-    console.log(`[Backend] Sending prompt to Ollama... (model=${model}, role=${r})`);
-    console.log(
-      "[Backend] Ollama resolved request:",
-      JSON.stringify(
-        {
-          model,
-          role: r,
-          options: resolvedOptions,
-          stop: stop ?? null,
-        },
-        null,
-        2,
-      ),
-    );
+    if (isBackendLlmVerboseLog()) {
+      console.log(`[Backend] Sending prompt to Ollama... (model=${model}, role=${r})`);
+      console.log(
+        "[Backend] Ollama resolved request:",
+        JSON.stringify(
+          {
+            model,
+            role: r,
+            options: resolvedOptions,
+            stop: stop ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -425,10 +493,12 @@ async function ollamaGenerateRaw(
 
     const rawResponse = data.response;
     const tokenCount = Math.max(1, Math.ceil(rawResponse.length / 4));
-    console.log(
-      "[Backend] Ollama response received:",
-      JSON.stringify({ model, tokenCount }),
-    );
+    if (isBackendLlmVerboseLog()) {
+      console.log(
+        "[Backend] Ollama response received:",
+        JSON.stringify({ model, tokenCount }),
+      );
+    }
     if (isDevelopment) {
       console.log("[Ollama Debug] Raw response length=%d", rawResponse.length);
     }
@@ -467,7 +537,7 @@ export async function generateJsonWithOllamaStrict<T>(
   }
   logUnparseableOllamaJson(raw, parsed.cleaned, parsed.message);
   const hint =
-    "Model returned non-JSON or malformed JSON after stripping <think> and taking the outermost {…} slice. " +
+    "Model returned non-JSON or malformed JSON after stripping reasoning blocks / markdown fences and balanced {...} extraction. " +
     "Try a JSON-tuned model, disable reasoning/thinking in the runner, or shorten the prompt.";
   throw new OllamaRequestError(
     `[Ollama Error] JSON parse failed after cleaning: ${parsed.message}. ${hint}`,

@@ -25,6 +25,7 @@ When your change touches runtime defaults or user-facing behavior, update docs i
 - **Scripts**: if npm scripts are added/renamed, update the scripts table in `README.md`.
 - **Major feature behavior**: document extraction/fallback/safety logic changes (for example Salary Oracle rules) in `README.md` and `CHANGELOG.md`.
 - **API response shape**: if `types/` contracts change, ensure dashboard/extension docs and examples still reflect actual fields.
+- **Discovery Hub / Playwright**: if sync behavior changes, update **`README.md`** (Discovery Hub section and prerequisites). Do not commit files under **`benchmarks/*.json`** or **`benchmarks/*.log`** — they are gitignored local tuning outputs.
 
 ## Extension
 

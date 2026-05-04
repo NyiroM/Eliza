@@ -665,6 +665,7 @@ async function stageEntityExtraction(
   ollamaModel: string,
   userConstraints: string[],
   strictLlm: boolean,
+  userCorrectionsAppend?: string,
 ): Promise<{ fields: JobParseFields; source: ParserSource }> {
   const fallbackFields = keywordFallback(jobTextForExtraction);
   const maxLen = JOB_TEXT_LIMITS.entityExtractionSlice;
@@ -693,6 +694,9 @@ SECTION TARGETING (critical):
 Regional job-board layout (common globally):
 - Sections titled "Nice to have", "Plus", "Advantages", or clearly labeled optional advantages: every skill or tool listed there MUST go into optional_skills ONLY. Never copy those items into required_skills. Missing an advantage section is never a hard gap.
 - Sections titled "Minimum requirements", "Must have", "Requirements", "Qualifications": those belong in required_skills when they name concrete tools/languages/platforms.
+
+TRUNCATION / WINDOW (critical):
+- JOB_TEXT below may be only the first N characters of the full posting. If section headers for "Nice to have", "Plus", "Advantages", or clearly labeled optional advantages do NOT appear anywhere in this visible window, do NOT promote tools to required_skills unless the same line uses explicit must/required/minimum wording; prefer optional_skills or omit ambiguous items.
 
 SKILLS (STRICT — hard requirements only):
 - required_skills: ONLY verifiable hard skills, tools, platforms, languages, certifications, and named methodologies (e.g. "Python", "SAP PM", "Agile", "English C1", "AWS", "Finite element analysis").
@@ -725,7 +729,11 @@ BENEFITS & COMMITMENTS:
 - benefits: short English perk labels; [] if none.
 - commitments: short English culture/value tags; [] if none.
 
-CONSTRAINT CROSS-CHECK:
+${
+    userConstraints.length > 0 && userCorrectionsAppend?.trim()
+      ? `USER_CORRECTIONS_AND_PREFERENCES (respect when extracting and in metadata_constraint_notes):\n${userCorrectionsAppend.trim()}\n\n`
+      : ""
+  }CONSTRAINT CROSS-CHECK:
 ${constraintsBlock}
 
 - Ignore company fluff unless it states a hard requirement.
@@ -760,6 +768,8 @@ ${slice}`;
 export type ParseJobTextOptions = {
   /** When true (dashboard pipeline), Ollama failures throw instead of silently using keyword fallbacks for skills. */
   strictLlm?: boolean;
+  /** Appended to entity-extraction prompt when `userConstraints` is non-empty (dashboard user corrections). */
+  userCorrectionsAppend?: string;
 };
 
 /**
@@ -804,6 +814,7 @@ export async function parseJobText(
     model,
     userConstraints,
     strictLlm,
+    userConstraints.length > 0 ? options?.userCorrectionsAppend : undefined,
   );
 
   if (strictLlm) {

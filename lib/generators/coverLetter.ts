@@ -1,3 +1,4 @@
+import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
 import { CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
 
@@ -50,7 +51,7 @@ function sanitizeCoverLetter(result: unknown, fallback: string): string {
 export async function generateCoverLetter(
   input: CoverLetterInput,
 ): Promise<CoverLetterResult> {
-  const model = input.model?.trim() || "llama3";
+  const model = input.model?.trim() || DEFAULT_OLLAMA_MODEL;
   const fallback = fallbackCoverLetter(input);
 
   const prompt = `

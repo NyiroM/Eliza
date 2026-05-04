@@ -1,13 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import DiscoveryHubPanel from "@/app/components/DiscoveryHubPanel";
 import JobInputHighlighter from "@/app/components/JobInputHighlighter";
+import { DEFAULT_OLLAMA_MODEL } from "@/config/constants";
 import type { SemanticHighlight } from "@/types/pipeline";
 
 type UploadStatus = {
   loaded: boolean;
   uploaded_at?: string | null;
   skills_count?: number;
+  /** Normalized skill tokens from the CV parser (GET after upload, or full parse response). */
+  skills?: string[];
 };
 
 type ConstraintsState = {
@@ -16,6 +20,7 @@ type ConstraintsState = {
 };
 
 type PipelineResult = {
+  job_source?: "manual" | "discovery_indeed" | "discovery_linkedin" | "discovery_profession";
   fit_score: number;
   matched_skills?: string[];
   missing_skills: string[];
@@ -80,8 +85,27 @@ type PipelineResult = {
     cv_parser_source?: string;
     job_parser_source?: string;
     constraints_source?: string;
+    cv_evidence_pass?: { confirmed_skills: string[]; source: string };
+    constraint_tactics_snapshot?: Record<string, string>;
   };
 };
+
+type SynonymRow = { from: string; to: string };
+
+function dedupeSynonymPairs(rows: SynonymRow[]): SynonymRow[] {
+  const seen = new Set<string>();
+  const out: SynonymRow[] = [];
+  for (const p of rows) {
+    const from = p.from.trim();
+    const to = p.to.trim();
+    if (!from || !to || from.toLowerCase() === to.toLowerCase()) continue;
+    const k = `${from.toLowerCase()}|${to.toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ from, to });
+  }
+  return out;
+}
 
 function FitGauge({ score, vetoed }: { score: number; vetoed: boolean }) {
   const display = vetoed ? 0 : Math.max(0, Math.min(100, Math.round(score)));
@@ -128,7 +152,15 @@ function FitGauge({ score, vetoed }: { score: number; vetoed: boolean }) {
   );
 }
 
+function jobSourceBadgeLabel(source?: PipelineResult["job_source"]): string {
+  if (!source || source === "manual") return "Manual paste";
+  if (source === "discovery_indeed") return "Discovery · Indeed";
+  if (source === "discovery_linkedin") return "Discovery · LinkedIn";
+  return "Discovery · Profession.hu";
+}
+
 export default function DashboardPage() {
+  const [activeTab, setActiveTab] = useState<"analysis" | "discovery">("analysis");
   const [status, setStatus] = useState<UploadStatus>({ loaded: false });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [jobText, setJobText] = useState("");
@@ -141,8 +173,8 @@ export default function DashboardPage() {
   const [constraints, setConstraints] = useState<ConstraintsState>({
     constraints: [],
   });
-  const [ollamaModels, setOllamaModels] = useState<string[]>(["llama3"]);
-  const [selectedModel, setSelectedModel] = useState("llama3");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([DEFAULT_OLLAMA_MODEL]);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_OLLAMA_MODEL);
   const [modelsListWarning, setModelsListWarning] = useState<string | null>(null);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(1);
@@ -153,32 +185,85 @@ export default function DashboardPage() {
   const [correctionDraft, setCorrectionDraft] = useState("");
   const [correctionBusy, setCorrectionBusy] = useState(false);
   const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
+  type VetoStanceOpt = "default" | "never_veto" | "soft_only";
+  const [skillSynonymPairs, setSkillSynonymPairs] = useState<Array<{ from: string; to: string }>>(
+    [],
+  );
+  const [skillSynonymPending, setSkillSynonymPending] = useState<Array<{ from: string; to: string }>>(
+    [],
+  );
+  const [synonymsUpdatedAt, setSynonymsUpdatedAt] = useState<string | null>(null);
+  const [tacticLocation, setTacticLocation] = useState<VetoStanceOpt>("default");
+  const [tacticRemoteZone, setTacticRemoteZone] = useState<VetoStanceOpt>("default");
+  const [tacticCompensation, setTacticCompensation] = useState<VetoStanceOpt>("default");
+  const [tacticsUpdatedAt, setTacticsUpdatedAt] = useState<string | null>(null);
+  const [domainSettingsBusy, setDomainSettingsBusy] = useState(false);
+  const [domainSettingsMessage, setDomainSettingsMessage] = useState<string | null>(null);
+  /** Last CV upload: raw LLM synonym rows (for transparency when none were added as pending). */
+  const [synonymReviewLastUpload, setSynonymReviewLastUpload] = useState<{
+    proposed: SynonymRow[];
+    rationale: string | null;
+    modelFailed: boolean;
+    at: string | null;
+    /** How many new pending rows were appended this upload (0 = all dupes or empty). */
+    addedRowCount: number;
+  } | null>(null);
+  const cvSynonymReviewRef = useRef<HTMLDivElement | null>(null);
   /** Re-runs must not be blocked while application assets generate; `loadingAnalysis` is the only busy gate. */
   const canRunAnalysis = status.loaded && jobText.trim().length > 0 && !loadingAnalysis;
 
-  const loadOllamaModels = useCallback(async () => {
+  const loadUserPrefsAndOllamaModels = useCallback(async () => {
     setModelsRefreshing(true);
     setModelsListWarning(null);
     try {
-      const response = await fetch("/api/ollama-models");
-      const data = (await response.json()) as {
+      const [modelsRes, prefsRes] = await Promise.all([
+        fetch("/api/ollama-models"),
+        fetch("/api/user-preferences"),
+      ]);
+      const md = (await modelsRes.json()) as {
         models?: string[];
         ok?: boolean;
         warning?: string;
       };
+      const pd = (await prefsRes.json()) as {
+        preferred_location?: string | null;
+        preferred_currency?: string | null;
+        ollama_model?: string | null;
+      };
       const list =
-        Array.isArray(data.models) && data.models.length > 0 ? data.models : ["llama3"];
+        Array.isArray(md.models) && md.models.length > 0 ? md.models : [DEFAULT_OLLAMA_MODEL];
       setOllamaModels(list);
-      if (data.ok === false && typeof data.warning === "string") {
-        setModelsListWarning(data.warning);
+      if (md.ok === false && typeof md.warning === "string") {
+        setModelsListWarning(md.warning);
       }
-      setSelectedModel((prev) => (list.includes(prev) ? prev : list[0]));
+      if (typeof pd.preferred_location === "string" && pd.preferred_location.trim()) {
+        setTargetLocation(pd.preferred_location.trim());
+      }
+      if (typeof pd.preferred_currency === "string" && pd.preferred_currency.trim()) {
+        setPreferredCurrency(pd.preferred_currency.trim().toUpperCase());
+      }
+      const saved =
+        typeof pd.ollama_model === "string" && pd.ollama_model.trim() ? pd.ollama_model.trim() : null;
+      const nextModel =
+        saved && list.includes(saved)
+          ? saved
+          : list.includes(DEFAULT_OLLAMA_MODEL)
+            ? DEFAULT_OLLAMA_MODEL
+            : list[0];
+      setSelectedModel(nextModel);
+      if (!saved || saved !== nextModel) {
+        void fetch("/api/user-preferences", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+          body: JSON.stringify({ ollama_model: nextModel }),
+        }).catch(() => {});
+      }
     } catch {
-      setOllamaModels(["llama3"]);
+      setOllamaModels([DEFAULT_OLLAMA_MODEL]);
       setModelsListWarning(
-        "Could not load installed models. Ensure Ollama is running and the server can run `ollama list`. Using llama3.",
+        "Could not load installed models or preferences. Ensure Ollama is running and the server can run `ollama list`.",
       );
-      setSelectedModel("llama3");
+      setSelectedModel(DEFAULT_OLLAMA_MODEL);
     } finally {
       setModelsRefreshing(false);
     }
@@ -186,42 +271,16 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
-      void loadOllamaModels();
+      void loadUserPrefsAndOllamaModels();
     }, 0);
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [loadOllamaModels]);
-
-  useEffect(() => {
-    console.log("[UI] Model changed to:", selectedModel);
-  }, [selectedModel]);
+  }, [loadUserPrefsAndOllamaModels]);
 
   useEffect(() => {
     void checkCvStatus();
   }, []);
-
-  useEffect(() => {
-    void loadPreferredLocation();
-  }, []);
-
-  async function loadPreferredLocation() {
-    try {
-      const response = await fetch("/api/user-preferences");
-      const data = (await response.json()) as {
-        preferred_location?: string | null;
-        preferred_currency?: string | null;
-      };
-      if (typeof data.preferred_location === "string" && data.preferred_location.trim()) {
-        setTargetLocation(data.preferred_location.trim());
-      }
-      if (typeof data.preferred_currency === "string" && data.preferred_currency.trim()) {
-        setPreferredCurrency(data.preferred_currency.trim().toUpperCase());
-      }
-    } catch {
-      /* ignore */
-    }
-  }
 
   async function savePreferredLocation() {
     setPrefsLocationBusy(true);
@@ -254,8 +313,13 @@ export default function DashboardPage() {
     setMessage("");
     try {
       const response = await fetch("/api/upload-cv");
-      const data = (await response.json()) as UploadStatus;
-      setStatus(data);
+      const data = (await response.json()) as UploadStatus & { skills?: string[] };
+      setStatus({
+        loaded: data.loaded,
+        uploaded_at: data.uploaded_at,
+        skills_count: data.skills_count,
+        skills: Array.isArray(data.skills) ? data.skills : undefined,
+      });
     } catch {
       setMessage("Unable to check CV status.");
     }
@@ -280,15 +344,62 @@ export default function DashboardPage() {
         headers: { "X-Eliza-Internal": "true" },
         body: formData,
       });
-      const data = (await response.json()) as { error?: string };
+      const data = (await response.json()) as {
+        error?: string;
+        parsed?: { skills?: string[] };
+        uploaded_at?: string;
+        synonym_suggestions_added?: number;
+        synonym_suggestions_pending_total?: number;
+        synonym_llm_proposed?: Array<{ from?: string; to?: string }>;
+        synonym_llm_rationale?: string | null;
+        synonym_suggestions_error?: boolean;
+      };
 
       if (!response.ok) {
         setMessage(data.error ?? "CV upload failed.");
         return;
       }
 
-      setMessage("CV uploaded and parsed successfully.");
+      const added = data.synonym_suggestions_added ?? 0;
+      const pendingTot = data.synonym_suggestions_pending_total ?? 0;
+      const proposedRaw = Array.isArray(data.synonym_llm_proposed) ? data.synonym_llm_proposed : [];
+      const proposed: SynonymRow[] = proposedRaw
+        .map((p) => ({
+          from: typeof p.from === "string" ? p.from.trim() : "",
+          to: typeof p.to === "string" ? p.to.trim() : "",
+        }))
+        .filter((p) => p.from && p.to);
+      setSynonymReviewLastUpload({
+        proposed,
+        rationale: data.synonym_llm_rationale ?? null,
+        modelFailed: data.synonym_suggestions_error === true,
+        at: typeof data.uploaded_at === "string" ? data.uploaded_at : new Date().toISOString(),
+        addedRowCount: added,
+      });
+
+      if (data.synonym_suggestions_error) {
+        setMessage(
+          "CV uploaded and parsed. Skill synonym suggestions could not run (check Ollama and the selected model).",
+        );
+      } else if (proposed.length === 0) {
+        setMessage(
+          "CV uploaded and parsed. The model returned no synonym mappings for this CV (or the run produced an empty list).",
+        );
+      } else if (added > 0) {
+        setMessage(
+          `CV uploaded and parsed. ${added} new synonym suggestion row(s) added (${pendingTot} total pending below — review and accept or dismiss).`,
+        );
+      } else {
+        setMessage(
+          `CV uploaded and parsed. The model proposed ${proposed.length} synonym mapping(s); all were already saved or pending — see “CV skills & synonym review” below.`,
+        );
+      }
+
       await checkCvStatus();
+      await loadDomainSettings();
+      window.requestAnimationFrame(() => {
+        cvSynonymReviewRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
     } catch {
       setMessage("CV upload failed.");
     } finally {
@@ -312,9 +423,63 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const loadDomainSettings = useCallback(async () => {
+    setDomainSettingsBusy(true);
+    setDomainSettingsMessage(null);
+    try {
+      const [synRes, tacRes] = await Promise.all([
+        fetch("/api/domain/skill-synonyms"),
+        fetch("/api/domain/constraint-tactics"),
+      ]);
+      const synData = (await synRes.json()) as {
+        pairs?: Array<{ from: string; to: string }>;
+        pending_suggestions?: Array<{ from: string; to: string }>;
+        updated_at?: string;
+      };
+      const tacData = (await tacRes.json()) as {
+        tactics?: Record<string, string>;
+        updated_at?: string;
+      };
+      if (synRes.ok) {
+        setSkillSynonymPairs(
+          Array.isArray(synData.pairs) ? synData.pairs.map((p) => ({ from: p.from, to: p.to })) : [],
+        );
+        setSkillSynonymPending(
+          Array.isArray(synData.pending_suggestions)
+            ? synData.pending_suggestions.map((p) => ({ from: p.from, to: p.to }))
+            : [],
+        );
+        setSynonymsUpdatedAt(synData.updated_at ?? null);
+      }
+      if (tacRes.ok) {
+        const t = tacData.tactics ?? {};
+        const norm = (v: string | undefined): VetoStanceOpt =>
+          v === "never_veto" || v === "soft_only" ? v : "default";
+        setTacticLocation(norm(t.location));
+        setTacticRemoteZone(norm(t.remote_zone));
+        setTacticCompensation(norm(t.compensation));
+        setTacticsUpdatedAt(tacData.updated_at ?? null);
+      }
+    } catch {
+      setDomainSettingsMessage("Could not load domain settings.");
+    } finally {
+      setDomainSettingsBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
-    void loadConstraints();
+    const id = window.setTimeout(() => {
+      void loadConstraints();
+    }, 0);
+    return () => window.clearTimeout(id);
   }, [loadConstraints]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      void loadDomainSettings();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [loadDomainSettings]);
 
   const runAnalysis = useCallback(async () => {
     if (!status.loaded) {
@@ -349,6 +514,7 @@ export default function DashboardPage() {
           refine_feedback: refineText,
           model: selectedModel,
           preferred_location: targetLocation.trim(),
+          job_source: "manual",
         }),
       });
       const data = (await response.json()) as PipelineResult & { error?: string };
@@ -494,6 +660,110 @@ export default function DashboardPage() {
     }
   }
 
+  async function persistSkillSynonymsToServer(
+    pairsIn: SynonymRow[],
+    pendingIn: SynonymRow[],
+    successMsg: string,
+  ) {
+    setDomainSettingsBusy(true);
+    setDomainSettingsMessage(null);
+    try {
+      const pairs = dedupeSynonymPairs(
+        pairsIn.map((p) => ({ from: p.from.trim(), to: p.to.trim() })).filter((p) => p.from && p.to),
+      );
+      const pending_suggestions = pendingIn
+        .map((p) => ({ from: p.from.trim(), to: p.to.trim() }))
+        .filter((p) => p.from && p.to);
+      const response = await fetch("/api/domain/skill-synonyms", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({ pairs, pending_suggestions }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        updated_at?: string;
+        pending_suggestions?: Array<{ from: string; to: string }>;
+        pairs?: Array<{ from: string; to: string }>;
+      };
+      if (!response.ok) {
+        setDomainSettingsMessage(data.error ?? "Could not save skill synonyms.");
+        return;
+      }
+      setSynonymsUpdatedAt(data.updated_at ?? null);
+      if (Array.isArray(data.pairs)) {
+        setSkillSynonymPairs(data.pairs.map((p) => ({ from: p.from, to: p.to })));
+      }
+      if (Array.isArray(data.pending_suggestions)) {
+        setSkillSynonymPending(data.pending_suggestions.map((p) => ({ from: p.from, to: p.to })));
+      }
+      setDomainSettingsMessage(successMsg);
+    } catch {
+      setDomainSettingsMessage("Could not save skill synonyms.");
+    } finally {
+      setDomainSettingsBusy(false);
+    }
+  }
+
+  async function saveSkillSynonymsToApi() {
+    await persistSkillSynonymsToServer(
+      skillSynonymPairs,
+      skillSynonymPending,
+      "Skill synonyms saved.",
+    );
+  }
+
+  async function approvePendingSynonymRow(idx: number) {
+    const row = skillSynonymPending[idx];
+    if (!row?.from.trim() || !row?.to.trim()) return;
+    const nextPairs = dedupeSynonymPairs([...skillSynonymPairs, row]);
+    const nextPending = skillSynonymPending.filter((_, i) => i !== idx);
+    await persistSkillSynonymsToServer(nextPairs, nextPending, "Synonym approved.");
+  }
+
+  async function dismissPendingSynonymRow(idx: number) {
+    const nextPending = skillSynonymPending.filter((_, i) => i !== idx);
+    await persistSkillSynonymsToServer(skillSynonymPairs, nextPending, "Suggestion dismissed.");
+  }
+
+  async function approveAllPendingSynonyms() {
+    if (skillSynonymPending.length === 0) return;
+    const nextPairs = dedupeSynonymPairs([...skillSynonymPairs, ...skillSynonymPending]);
+    await persistSkillSynonymsToServer(nextPairs, [], "All suggestions approved.");
+  }
+
+  async function dismissAllPendingSynonyms() {
+    if (skillSynonymPending.length === 0) return;
+    await persistSkillSynonymsToServer(skillSynonymPairs, [], "All pending suggestions dismissed.");
+  }
+
+  async function saveConstraintTacticsToApi() {
+    setDomainSettingsBusy(true);
+    setDomainSettingsMessage(null);
+    try {
+      const tactics: Record<string, string> = {
+        location: tacticLocation,
+        remote_zone: tacticRemoteZone,
+        compensation: tacticCompensation,
+      };
+      const response = await fetch("/api/domain/constraint-tactics", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({ tactics }),
+      });
+      const data = (await response.json()) as { error?: string; updated_at?: string };
+      if (!response.ok) {
+        setDomainSettingsMessage(data.error ?? "Could not save constraint tactics.");
+        return;
+      }
+      setTacticsUpdatedAt(data.updated_at ?? null);
+      setDomainSettingsMessage("Constraint tactics saved.");
+    } catch {
+      setDomainSettingsMessage("Could not save constraint tactics.");
+    } finally {
+      setDomainSettingsBusy(false);
+    }
+  }
+
   function formatSalaryValue(amount: number, currency: string) {
     try {
       return new Intl.NumberFormat("en-US", {
@@ -509,14 +779,49 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-8">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">ELIZA Dashboard</h1>
-          <p className="mt-1 max-w-2xl text-sm text-slate-400">
-            Upload your CV once, then paste a posting for semantic fit scoring, a transparent match
-            breakdown, and optional application assets.
-          </p>
+        <header className="space-y-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">ELIZA Dashboard</h1>
+            <p className="mt-1 max-w-2xl text-sm text-slate-400">
+              Upload your CV once, then paste a posting for semantic fit scoring, a transparent match
+              breakdown, and optional application assets.
+            </p>
+          </div>
+          <nav className="flex flex-wrap gap-2 border-b border-slate-800 pb-2" aria-label="Dashboard sections">
+            <button
+              type="button"
+              onClick={() => setActiveTab("analysis")}
+              className={`rounded-md px-4 py-2 text-sm font-medium ${
+                activeTab === "analysis"
+                  ? "bg-slate-100 text-slate-900"
+                  : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              Analysis
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("discovery")}
+              className={`rounded-md px-4 py-2 text-sm font-medium ${
+                activeTab === "discovery"
+                  ? "bg-slate-100 text-slate-900"
+                  : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              Discovery Hub
+            </button>
+          </nav>
         </header>
 
+        {activeTab === "discovery" ? (
+          <DiscoveryHubPanel
+            selectedModel={selectedModel}
+            preferredLocation={targetLocation}
+            cvLoaded={status.loaded}
+          />
+        ) : null}
+
+        {activeTab === "analysis" ? (
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:items-start">
           <div className="space-y-6">
             <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3">
@@ -563,6 +868,152 @@ export default function DashboardPage() {
             </button>
           </div>
             </section>
+
+            {status.loaded ? (
+              <section
+                id="cv-skill-synonym-review"
+                ref={cvSynonymReviewRef}
+                className="rounded-lg border border-amber-800/40 bg-slate-900 p-4 space-y-4 shadow-lg shadow-amber-950/10"
+              >
+                <div>
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-200/90">
+                    CV skills &amp; synonym review
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-400">
+                    <span className="font-medium text-slate-300">Skills</span> come from the CV parser
+                    (normalized tokens). <span className="font-medium text-slate-300">Synonym rows</span> are
+                    extra alias → canonical mappings the model suggests for job matching; they are not applied
+                    until you accept them.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <h3 className="text-xs font-medium text-slate-300">Skills extracted from your CV</h3>
+                  <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-slate-700 bg-slate-950/60 p-2">
+                    {(status.skills ?? []).length === 0 ? (
+                      <span className="text-xs text-slate-500">No skills in the parsed CV payload.</span>
+                    ) : (
+                      (status.skills ?? []).map((s) => (
+                        <span
+                          key={s}
+                          className="rounded-full border border-sky-800/60 bg-sky-950/50 px-2 py-0.5 text-xs text-sky-100"
+                        >
+                          {s}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                  {typeof status.skills_count === "number" && status.skills_count > (status.skills ?? []).length ? (
+                    <p className="text-[11px] text-slate-500">
+                      Showing {(status.skills ?? []).length} of {status.skills_count} skills (list truncated in
+                      API).
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2 border-t border-slate-800 pt-3">
+                  <h3 className="text-xs font-medium text-slate-300">AI-suggested synonym mappings</h3>
+                  {skillSynonymPending.length > 0 ? (
+                    <ul className="space-y-2">
+                      {skillSynonymPending.map((row, idx) => (
+                        <li
+                          key={`review-pending-${idx}-${row.from}-${row.to}`}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-800/45 bg-amber-950/20 px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1 text-sm">
+                            <span className="font-mono text-amber-100/95">{row.from}</span>
+                            <span className="mx-2 text-amber-600/80">→</span>
+                            <span className="font-mono text-emerald-200/90">{row.to}</span>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <button
+                              type="button"
+                              disabled={domainSettingsBusy}
+                              title="Accept and save as a saved synonym"
+                              className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                              onClick={() => void approvePendingSynonymRow(idx)}
+                            >
+                              Accept
+                            </button>
+                            <button
+                              type="button"
+                              disabled={domainSettingsBusy}
+                              title="Dismiss this suggestion"
+                              className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-50"
+                              onClick={() => void dismissPendingSynonymRow(idx)}
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      No pending synonym rows. They appear here after a CV upload when the model proposes new
+                      pairs.
+                    </p>
+                  )}
+                  {skillSynonymPending.length > 1 ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={domainSettingsBusy}
+                        className="rounded-md bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                        onClick={() => void approveAllPendingSynonyms()}
+                      >
+                        Accept all
+                      </button>
+                      <button
+                        type="button"
+                        disabled={domainSettingsBusy}
+                        className="rounded-md bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600 disabled:opacity-50"
+                        onClick={() => void dismissAllPendingSynonyms()}
+                      >
+                        Dismiss all
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+
+                {synonymReviewLastUpload?.modelFailed ? (
+                  <p className="rounded-md border border-red-900/50 bg-red-950/30 px-2 py-1.5 text-xs text-red-200/90">
+                    Synonym suggestion step failed (Ollama unreachable, timeout, or invalid JSON). Fix the model
+                    connection and upload again.
+                  </p>
+                ) : null}
+                {synonymReviewLastUpload?.rationale ? (
+                  <p className="text-xs text-slate-500">
+                    <span className="font-medium text-slate-400">Model note: </span>
+                    {synonymReviewLastUpload.rationale}
+                  </p>
+                ) : null}
+                {synonymReviewLastUpload &&
+                synonymReviewLastUpload.proposed.length > 0 &&
+                synonymReviewLastUpload.addedRowCount === 0 &&
+                !synonymReviewLastUpload.modelFailed ? (
+                  <div className="rounded-md border border-slate-700 bg-slate-950/50 p-2 text-xs text-slate-400">
+                    <p className="mb-1 font-medium text-slate-300">Latest model proposals (this upload)</p>
+                    <p className="mb-2 text-slate-500">
+                      The model returned these pairs, but none were added as new pending rows (they likely match
+                      skills already on file or duplicate pending/saved mappings).
+                    </p>
+                    <ul className="space-y-1 font-mono text-[11px] text-slate-300">
+                      {synonymReviewLastUpload.proposed.map((p, i) => (
+                        <li key={`prop-${i}-${p.from}-${p.to}`}>
+                          {p.from} → {p.to}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <p className="text-[11px] text-slate-600">
+                  Advanced: edit rows manually in{" "}
+                  <span className="text-slate-400">Domain &amp; CV tuning → Skill synonyms</span> below.
+                </p>
+              </section>
+            ) : null}
 
             <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
@@ -611,7 +1062,15 @@ export default function DashboardPage() {
             <select
               id="ollama-model"
               value={selectedModel}
-              onChange={(event) => setSelectedModel(event.target.value)}
+              onChange={(event) => {
+                const v = event.target.value;
+                setSelectedModel(v);
+                void fetch("/api/user-preferences", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+                  body: JSON.stringify({ ollama_model: v }),
+                }).catch(() => {});
+              }}
               className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm min-w-[10rem]"
             >
               {ollamaModels.map((name) => (
@@ -623,7 +1082,7 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => {
-                void loadOllamaModels();
+                void loadUserPrefsAndOllamaModels();
               }}
               disabled={modelsRefreshing}
               className="rounded-md bg-slate-700 px-3 py-1.5 text-sm hover:bg-slate-600 disabled:opacity-50"
@@ -673,9 +1132,19 @@ export default function DashboardPage() {
 
           <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
             <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-5">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-                Match output
-              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+                  Match output
+                </h2>
+                {result ? (
+                  <span
+                    className="inline-flex rounded-full border border-slate-600 bg-slate-800/80 px-2.5 py-0.5 text-[11px] font-medium text-slate-200"
+                    title="How this job text entered ELIZA"
+                  >
+                    Source: {jobSourceBadgeLabel(result.job_source)}
+                  </span>
+                ) : null}
+              </div>
           {!result ? (
             <p className="text-sm text-slate-400">
               Run analysis from the left column to see fit scoring and breakdown here.
@@ -709,7 +1178,7 @@ export default function DashboardPage() {
                   <p className="text-xs text-slate-500">
                     Model:{" "}
                     <span className="font-medium text-slate-300">
-                      {result.analysis_model ?? "llama3"}
+                      {result.analysis_model ?? DEFAULT_OLLAMA_MODEL}
                     </span>
                   </p>
                   <p className="text-sm text-slate-300">
@@ -863,6 +1332,15 @@ export default function DashboardPage() {
                     ? " (this run was adjusted for consistency)."
                     : "."}
                 </p>
+                {result.debug?.cv_evidence_pass &&
+                (result.debug.cv_evidence_pass.confirmed_skills?.length ?? 0) > 0 ? (
+                  <p className="mt-2 text-[11px] text-slate-400">
+                    CV evidence pass confirmed:{" "}
+                    <span className="font-mono text-slate-300">
+                      {result.debug.cv_evidence_pass.confirmed_skills.join(", ")}
+                    </span>
+                  </p>
+                ) : null}
               </details>
 
               <div className="rounded-md border border-slate-700 bg-slate-950/50 p-3 space-y-2">
@@ -1103,6 +1581,7 @@ export default function DashboardPage() {
             </section>
           </div>
         </div>
+        ) : null}
 
         <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
@@ -1135,6 +1614,218 @@ export default function DashboardPage() {
           )}
           {constraints.updated_at ? (
             <p className="text-xs text-slate-500">Updated: {constraints.updated_at}</p>
+          ) : null}
+        </section>
+
+        <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+            Domain &amp; CV tuning
+          </h2>
+          <p className="text-xs text-slate-500">
+            Skill synonyms normalize tokens for matching (e.g. React.js → react). After each CV upload, use
+            <span className="text-slate-400"> CV skills &amp; synonym review </span>
+            (above) for one-click accept/dismiss; this block is for manual edits, Add row, and bulk save.
+            Constraint tactics soften vetoes vs. score deltas (semantic scorer + offline location check).
+          </p>
+
+          <div className="space-y-2">
+            <h3 className="text-xs font-medium text-slate-300">Skill synonyms</h3>
+            <div className="space-y-2 max-h-96 overflow-auto pr-1">
+              {skillSynonymPairs.length === 0 && skillSynonymPending.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  No rows yet — upload a CV for AI suggestions, or use Add row.
+                </p>
+              ) : null}
+              {skillSynonymPending.map((row, idx) => (
+                <div
+                  key={`pending-${idx}-${row.from}-${row.to}`}
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-amber-800/40 bg-amber-950/15 pl-1 pr-1 py-0.5"
+                >
+                  <input
+                    type="text"
+                    value={row.from}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSkillSynonymPending((prev) =>
+                        prev.map((p, i) => (i === idx ? { ...p, from: v } : p)),
+                      );
+                    }}
+                    placeholder="alias (e.g. react.js)"
+                    className="min-w-[8rem] flex-1 rounded border border-amber-900/50 bg-slate-950 px-2 py-1 text-xs"
+                  />
+                  <span className="text-amber-600/90">→</span>
+                  <input
+                    type="text"
+                    value={row.to}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSkillSynonymPending((prev) =>
+                        prev.map((p, i) => (i === idx ? { ...p, to: v } : p)),
+                      );
+                    }}
+                    placeholder="canonical (e.g. react)"
+                    className="min-w-[8rem] flex-1 rounded border border-amber-900/50 bg-slate-950 px-2 py-1 text-xs"
+                  />
+                  <span className="shrink-0 rounded bg-amber-900/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-100">
+                    Suggested
+                  </span>
+                  <button
+                    type="button"
+                    disabled={domainSettingsBusy}
+                    className="rounded bg-emerald-800 px-2 py-1 text-xs hover:bg-emerald-700 disabled:opacity-50"
+                    onClick={() => void approvePendingSynonymRow(idx)}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    disabled={domainSettingsBusy}
+                    className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600 disabled:opacity-50"
+                    onClick={() => void dismissPendingSynonymRow(idx)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              ))}
+              {skillSynonymPairs.map((row, idx) => (
+                <div key={`pair-${idx}`} className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={row.from}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSkillSynonymPairs((prev) =>
+                        prev.map((p, i) => (i === idx ? { ...p, from: v } : p)),
+                      );
+                    }}
+                    placeholder="alias (e.g. react.js)"
+                    className="min-w-[8rem] flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                  />
+                  <span className="text-slate-500">→</span>
+                  <input
+                    type="text"
+                    value={row.to}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSkillSynonymPairs((prev) =>
+                        prev.map((p, i) => (i === idx ? { ...p, to: v } : p)),
+                      );
+                    }}
+                    placeholder="canonical (e.g. react)"
+                    className="min-w-[8rem] flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                  />
+                  <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                    Saved
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+                    onClick={() =>
+                      setSkillSynonymPairs((prev) => prev.filter((_, i) => i !== idx))
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600"
+                onClick={() => setSkillSynonymPairs((prev) => [...prev, { from: "", to: "" }])}
+              >
+                Add row
+              </button>
+              <button
+                type="button"
+                disabled={domainSettingsBusy}
+                onClick={() => void saveSkillSynonymsToApi()}
+                className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                Save synonyms
+              </button>
+              {skillSynonymPending.length > 0 ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={domainSettingsBusy}
+                    onClick={() => void approveAllPendingSynonyms()}
+                    className="rounded bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    Approve all suggested
+                  </button>
+                  <button
+                    type="button"
+                    disabled={domainSettingsBusy}
+                    onClick={() => void dismissAllPendingSynonyms()}
+                    className="rounded bg-slate-600 px-3 py-1.5 text-xs hover:bg-slate-500 disabled:opacity-50"
+                  >
+                    Dismiss all suggested
+                  </button>
+                </>
+              ) : null}
+            </div>
+            {synonymsUpdatedAt ? (
+              <p className="text-xs text-slate-500">Synonyms file updated: {synonymsUpdatedAt}</p>
+            ) : null}
+          </div>
+
+          <div className="space-y-2 border-t border-slate-800 pt-3">
+            <h3 className="text-xs font-medium text-slate-300">Constraint tactics</h3>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-slate-400">Location</span>
+                <select
+                  value={tacticLocation}
+                  onChange={(e) => setTacticLocation(e.target.value as VetoStanceOpt)}
+                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1"
+                >
+                  <option value="default">Default (veto ok)</option>
+                  <option value="never_veto">Never veto</option>
+                  <option value="soft_only">Soft only</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-slate-400">Remote / zone</span>
+                <select
+                  value={tacticRemoteZone}
+                  onChange={(e) => setTacticRemoteZone(e.target.value as VetoStanceOpt)}
+                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1"
+                >
+                  <option value="default">Default (veto ok)</option>
+                  <option value="never_veto">Never veto</option>
+                  <option value="soft_only">Soft only</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-slate-400">Compensation</span>
+                <select
+                  value={tacticCompensation}
+                  onChange={(e) => setTacticCompensation(e.target.value as VetoStanceOpt)}
+                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1"
+                >
+                  <option value="default">Default (veto ok)</option>
+                  <option value="never_veto">Never veto</option>
+                  <option value="soft_only">Soft only</option>
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              disabled={domainSettingsBusy}
+              onClick={() => void saveConstraintTacticsToApi()}
+              className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              Save tactics
+            </button>
+            {tacticsUpdatedAt ? (
+              <p className="text-xs text-slate-500">Tactics file updated: {tacticsUpdatedAt}</p>
+            ) : null}
+          </div>
+
+          {domainSettingsMessage ? (
+            <p className="text-xs text-emerald-300/90">{domainSettingsMessage}</p>
           ) : null}
         </section>
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { DEFAULT_OLLAMA_MODEL } from "../../../config/constants";
 import type { SemanticHighlight } from "../../../types/pipeline";
 
 const envApi = import.meta.env.VITE_ELIZA_API_URL;
@@ -70,37 +71,56 @@ export function App() {
   const [refineText, setRefineText] = useState<string>("");
   const [constraints, setConstraints] = useState<ConstraintsState>({ constraints: [] });
   const [constraintsBusy, setConstraintsBusy] = useState<boolean>(false);
-  const [ollamaModels, setOllamaModels] = useState<string[]>(["llama3"]);
-  const [selectedModel, setSelectedModel] = useState("llama3");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([DEFAULT_OLLAMA_MODEL]);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_OLLAMA_MODEL);
   const [modelsListWarning, setModelsListWarning] = useState<string | null>(null);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [cvLoaded, setCvLoaded] = useState<boolean>(false);
   const [analysisStep, setAnalysisStep] = useState(1);
   const [loadingAssets, setLoadingAssets] = useState(false);
 
-  const loadOllamaModels = useCallback(async () => {
+  const loadUserPrefsAndOllamaModels = useCallback(async () => {
     setModelsRefreshing(true);
     setModelsListWarning(null);
     try {
-      const response = await fetch(`${API_BASE}/api/ollama-models`);
-      const data = (await response.json()) as {
+      const [modelsRes, prefsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/ollama-models`),
+        fetch(`${API_BASE}/api/user-preferences`),
+      ]);
+      const md = (await modelsRes.json()) as {
         models?: string[];
         ok?: boolean;
         warning?: string;
       };
+      const pd = (await prefsRes.json()) as { ollama_model?: string | null };
       const list =
-        Array.isArray(data.models) && data.models.length > 0 ? data.models : ["llama3"];
+        Array.isArray(md.models) && md.models.length > 0 ? md.models : [DEFAULT_OLLAMA_MODEL];
       setOllamaModels(list);
-      if (data.ok === false && typeof data.warning === "string") {
-        setModelsListWarning(data.warning);
+      if (md.ok === false && typeof md.warning === "string") {
+        setModelsListWarning(md.warning);
       }
-      setSelectedModel((prev) => (list.includes(prev) ? prev : list[0]));
+      const saved =
+        typeof pd.ollama_model === "string" && pd.ollama_model.trim() ? pd.ollama_model.trim() : null;
+      const nextModel =
+        saved && list.includes(saved)
+          ? saved
+          : list.includes(DEFAULT_OLLAMA_MODEL)
+            ? DEFAULT_OLLAMA_MODEL
+            : list[0];
+      setSelectedModel(nextModel);
+      if (!saved || saved !== nextModel) {
+        void fetch(`${API_BASE}/api/user-preferences`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+          body: JSON.stringify({ ollama_model: nextModel }),
+        }).catch(() => {});
+      }
     } catch {
-      setOllamaModels(["llama3"]);
+      setOllamaModels([DEFAULT_OLLAMA_MODEL]);
       setModelsListWarning(
-        `Could not load models from ${API_BASE}. Is the Next app running and Ollama available? Using llama3.`,
+        `Could not load models from ${API_BASE}. Is the Next app running and Ollama available?`,
       );
-      setSelectedModel("llama3");
+      setSelectedModel(DEFAULT_OLLAMA_MODEL);
     } finally {
       setModelsRefreshing(false);
     }
@@ -108,12 +128,12 @@ export function App() {
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
-      void loadOllamaModels();
+      void loadUserPrefsAndOllamaModels();
     }, 0);
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [loadOllamaModels]);
+  }, [loadUserPrefsAndOllamaModels]);
 
   useEffect(() => {
     void (async () => {
@@ -314,7 +334,15 @@ export function App() {
         <select
           id="ollama-model"
           value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setSelectedModel(v);
+            void fetch(`${API_BASE}/api/user-preferences`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+              body: JSON.stringify({ ollama_model: v }),
+            }).catch(() => {});
+          }}
           className="flex-1 min-w-0 rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs"
         >
           {ollamaModels.map((name) => (
@@ -326,7 +354,7 @@ export function App() {
         <button
           type="button"
           onClick={() => {
-            void loadOllamaModels();
+            void loadUserPrefsAndOllamaModels();
           }}
           disabled={modelsRefreshing}
           className="rounded-md bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600 disabled:opacity-50"
@@ -472,7 +500,7 @@ export function App() {
             </div>
             <p className="text-[11px] text-slate-500 mb-2">
               Analyzed with:{" "}
-              <span className="text-slate-300">{result.analysis_model ?? "llama3"}</span>
+              <span className="text-slate-300">{result.analysis_model ?? DEFAULT_OLLAMA_MODEL}</span>
             </p>
             <p className="text-[11px] text-slate-500">
               Loc: {result.extracted_entities?.job_location?.trim() || "—"} |{" "}

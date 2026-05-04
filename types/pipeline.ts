@@ -16,10 +16,19 @@ export type SemanticHighlight = {
   reason: string;
 };
 
+/** How the job text entered the pipeline (dashboard paste vs Discovery Hub). */
+export type JobSourceKind =
+  | "manual"
+  | "discovery_indeed"
+  | "discovery_linkedin"
+  | "discovery_profession";
+
 export type PipelineInput = {
   job: string;
   /** Ollama model tag used for all LLM stages in this run. */
   model?: string;
+  /** When set, echoed on output for UI badges (defaults to manual). */
+  job_source?: JobSourceKind;
   /**
    * If set (including ""), used for this run: non-empty = preferred place; empty = open to any location.
    * If omitted (undefined), falls back to saved dashboard preference from storage.
@@ -79,6 +88,8 @@ export type InterviewPrepItem = {
 };
 
 export type PipelineOutput = {
+  /** Present after run; used for Match output source badge. */
+  job_source?: JobSourceKind;
   fit_score: number;
   matched_skills: string[];
   missing_skills: string[];
@@ -126,6 +137,10 @@ export type PipelineOutput = {
     constraints_source: "llm" | "fallback";
     /** True when fit_score was aligned to the sum of structured score_components. */
     fit_score_reconciled_from_components: boolean;
+    /** Second-pass CV check: skills confirmed from raw CV text for previously missing required items. */
+    cv_evidence_pass?: { confirmed_skills: string[]; source: "llm" | "skipped" };
+    /** Saved per-domain veto stance (location / remote_zone / compensation). */
+    constraint_tactics_snapshot?: Record<string, string>;
   };
 };
 

@@ -1,3 +1,4 @@
+import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
 import PDFParser from "pdf2json";
 import type { CvParseResult } from "../../types/cv";
@@ -137,9 +138,9 @@ function sanitizeCvResult(result: unknown, fallback: CvParseResult): CvParseResu
 
 export async function parseCvText(
   cvText: string,
-  ollamaModel = "llama3",
+  ollamaModel = DEFAULT_OLLAMA_MODEL,
 ): Promise<CvParseResult> {
-  const model = ollamaModel.trim() || "llama3";
+  const model = ollamaModel.trim() || DEFAULT_OLLAMA_MODEL;
   const fallback: CvParseResult = {
     skills: extractSkillsKeywordFallback(cvText),
     seniority_level: detectSeniorityFallback(cvText),

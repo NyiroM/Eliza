@@ -20,11 +20,26 @@ export const JOB_TEXT_LIMITS = {
 export const CV_CONTEXT_LIMITS = {
   prunedSkillsMax: 45,
   coreStoriesMax: 8,
-  experienceSnippetsMaxChars: 2400,
+  experienceSnippetsMaxChars: 1800,
+  /** Work-experience region after section header (parallel to heuristic experience_lines). */
+  recentExperienceSectionMaxChars: 2200,
   prunedBlockMaxChars: 4000,
   userProfileJoinMax: 8000,
   experienceLineMaxChars: 200,
   experienceSnippetLinesMin: 6,
+} as const;
+
+/** Second-pass CV evidence LLM (missing skills only). */
+export const CV_EVIDENCE_PASS_LIMITS = {
+  maxMissingSkills: 14,
+  cvTextChars: 12_000,
+} as const;
+
+/** LLM synonym suggestions after CV upload (pending user approval). */
+export const SKILL_SYNONYM_SUGGEST_LIMITS = {
+  maxPairsFromLlm: 16,
+  cvTextChars: 10_000,
+  maxPendingStored: 48,
 } as const;
 
 /** API validation (also documented in README). */
@@ -67,6 +82,39 @@ export const ENGLISH_DETECTION_JOB_LEXEME_WEIGHT = 2;
 
 /** Extra weight per strong phrase match (e.g. "key responsibilities"). */
 export const ENGLISH_DETECTION_PHRASE_BONUS_WEIGHT = 2;
+
+/**
+ * First pipeline batch size after each discovery fetch (remaining jobs stay in eval queue).
+ * Each job runs the full Ollama veto pipeline — this dominates wall time after fetch.
+ * Set `ELIZA_DISCOVERY_SYNC_EVAL_BATCH=0` to skip in-sync analysis (fetch only; drain via process-queue).
+ */
+const _syncEval = parseInt(process.env.ELIZA_DISCOVERY_SYNC_EVAL_BATCH ?? "", 10);
+export const DISCOVERY_SYNC_EVAL_BATCH = Number.isFinite(_syncEval)
+  ? Math.min(20, Math.max(0, _syncEval))
+  : 2;
+
+/**
+ * Default batch for POST /api/discovery/process-queue (each round). Override with `ELIZA_DISCOVERY_QUEUE_DRAIN_BATCH`.
+ */
+const _drainBatch = parseInt(process.env.ELIZA_DISCOVERY_QUEUE_DRAIN_BATCH ?? "", 10);
+export const DISCOVERY_QUEUE_DRAIN_BATCH = Number.isFinite(_drainBatch)
+  ? Math.min(20, Math.max(1, _drainBatch))
+  : 4;
+
+/**
+ * Discovery pipeline failure handling: how many attempts before a job is treated as
+ * permanently evaluated, and the cooldown between retries within the same drain.
+ * Override with `ELIZA_DISCOVERY_FAILURE_MAX_ATTEMPTS` and `ELIZA_DISCOVERY_FAILURE_COOLDOWN_MS`.
+ */
+const _failMax = parseInt(process.env.ELIZA_DISCOVERY_FAILURE_MAX_ATTEMPTS ?? "", 10);
+export const DISCOVERY_FAILURE_MAX_ATTEMPTS = Number.isFinite(_failMax)
+  ? Math.min(10, Math.max(1, _failMax))
+  : 3;
+
+const _failCooldown = parseInt(process.env.ELIZA_DISCOVERY_FAILURE_COOLDOWN_MS ?? "", 10);
+export const DISCOVERY_FAILURE_COOLDOWN_MS = Number.isFinite(_failCooldown)
+  ? Math.max(0, _failCooldown)
+  : 30 * 60 * 1000;
 
 /** `ollama list` subprocess timeout (ms). */
 export const OLLAMA_LIST_TIMEOUT_MS = 20_000;

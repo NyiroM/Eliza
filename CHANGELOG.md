@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.25] — 2026-05-04
+
+### Added
+
+- **Discovery Hub** — dashboard panel and **`app/api/discovery/`** routes for Indeed, LinkedIn, and Profession.hu catalog sync, keyword suggestions, evaluation queue, and **New matches** / non-match rows (`types/discovery.ts`).
+- **Domain APIs** — **`app/api/domain/skill-synonyms`** and **`app/api/domain/constraint-tactics`** backed by storage helpers for parser- and UI-visible tactics.
+- **Pipeline modularization** — staged logic under **`lib/pipeline/`** with a thin **`lib/pipeline.ts`** entry.
+- **CV evidence pass** and related parser/storage updates for more traceable skill confirmation (`debug.cv_evidence_pass` on responses when enabled).
+- **Developer scripts** — Profession.hu microsteps, integration search, Indeed URL verifier, job-id canonicalization, and **`benchmark:ollama-tuning`** (writes local artifacts under **`benchmarks/`**, gitignored).
+
+### Changed
+
+- **Next.js 16** / **React 19** stack alignment; **`next.config.ts`** marks Playwright packages as server externals where needed.
+- README repository layout, prerequisites, scripts table, and Discovery Hub usage (including **`npx playwright install chromium`**).
+
 ## [0.4.24] — 2026-04-23
 
 ### Added
@@ -51,4 +66,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
+[0.4.25]: https://github.com/NyiroM/Eliza/compare/v0.4.24...v0.4.25
 [0.4.24]: https://github.com/NyiroM/Eliza/compare/v0.2.0...v0.4.24

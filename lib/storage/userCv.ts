@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { parseCvPdfBuffer, parseCvText, type CvParseResult } from "../parsers/cvParser";
 
 const STORAGE_DIR = path.join(process.cwd(), "storage");
@@ -29,7 +30,7 @@ export async function loadStoredCvFromStorage(): Promise<StoredCvPayload | null>
 
 export async function parseAndStoreCvFromPdfBuffer(
   pdfBuffer: Buffer,
-  ollamaModel = "llama3",
+  ollamaModel = DEFAULT_OLLAMA_MODEL,
   sourceFilename?: string | null,
 ): Promise<StoredCvPayload> {
   const rawText = await parseCvPdfBuffer(pdfBuffer);

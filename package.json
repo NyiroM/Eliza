@@ -15,9 +15,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:salary-oracle": "tsx scripts/verify-salary-oracle.mts"
+    "test:salary-oracle": "tsx scripts/verify-salary-oracle.mts",
+    "debug:profession-microsteps": "tsx scripts/debug-profession-hu-microsteps.mts",
+    "test:profession-search": "tsx scripts/integration-profession-hu-search.mts",
+    "test:indeed-job-url": "tsx scripts/verify-indeed-job-url.mts",
+    "test:job-id-canonicalization": "tsx scripts/verify-job-id-canonicalization.mts",
+    "benchmark:ollama-tuning": "tsx scripts/benchmark-ollama-tuning.mts"
   },
   "dependencies": {
+    "playwright": "^1.49.0",
+    "cheerio": "^1.0.0",
     "autoprefixer": "^10.5.0",
     "next": "16.2.4",
     "pdf2json": "^4.0.3",

@@ -1,11 +1,14 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { isBackendLlmVerboseLog } from "../../../lib/logging/backendLlmVerbose";
 import { assertOllamaModelInstalled, OllamaRequestError } from "../../../lib/llm/ollama";
 import { runPipelineDetailed } from "../../../lib/pipeline";
 import { redactSensitiveData } from "../../../lib/security/redactSensitiveData";
 import { addUserConstraint } from "../../../lib/storage/userConstraints";
+import { resolveOllamaModel } from "../../../lib/storage/resolveOllamaModel";
 import {
   validateJobDescription,
+  validateJobSourceField,
   validateOllamaModelTag,
   validatePreferredLocationField,
 } from "../../../lib/validation";
@@ -31,6 +34,7 @@ type PipelineRequestBody = {
   refine_feedback?: unknown;
   model?: unknown;
   preferred_location?: unknown;
+  job_source?: unknown;
 };
 
 export async function POST(request: NextRequest) {
@@ -57,14 +61,20 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({ error: jobCheck.error }, 400);
   }
 
-  const rawModel =
-    typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : "llama3";
-  const modelCheck = validateOllamaModelTag(rawModel);
-  if (!modelCheck.ok) {
-    return jsonNoStore({ error: modelCheck.error }, 400);
+  const explicitModel = typeof body.model === "string" ? body.model.trim() : "";
+  let model: string;
+  if (explicitModel.length > 0) {
+    const modelCheck = validateOllamaModelTag(explicitModel);
+    if (!modelCheck.ok) {
+      return jsonNoStore({ error: modelCheck.error }, 400);
+    }
+    model = modelCheck.model;
+  } else {
+    model = await resolveOllamaModel(undefined);
   }
-  const model = modelCheck.model;
-  console.log(`[Backend] pipeline ${requestId} start model=${model}`);
+  if (isBackendLlmVerboseLog()) {
+    console.log(`[Backend] pipeline ${requestId} start model=${model}`);
+  }
 
   try {
     await assertOllamaModelInstalled(model);
@@ -85,6 +95,11 @@ export async function POST(request: NextRequest) {
   }
   const preferred_location = plocCheck.preferred_location;
 
+  const jsCheck = validateJobSourceField(body.job_source);
+  if (!jsCheck.ok) {
+    return jsonNoStore({ error: jsCheck.error }, 400);
+  }
+
   if (typeof body.refine_feedback === "string" && body.refine_feedback.trim()) {
     await addUserConstraint(body.refine_feedback);
   }
@@ -95,6 +110,7 @@ export async function POST(request: NextRequest) {
       job: jobCheck.job,
       model,
       ...(preferred_location !== undefined ? { preferred_location } : {}),
+      ...(jsCheck.job_source !== undefined ? { job_source: jsCheck.job_source } : {}),
     });
     console.log(
       `[Backend] pipeline ${requestId} done fit_score=${resultData.result.fit_score} analysis_model=${resultData.result.analysis_model}`,

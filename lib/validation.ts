@@ -5,6 +5,7 @@ import {
   OLLAMA_MODEL_MAX_LEN,
   PREFERRED_LOCATION_MAX_CHARS,
 } from "../config/constants";
+import type { JobSourceKind } from "../types/pipeline";
 
 export {
   CV_PDF_MAX_BYTES,
@@ -48,6 +49,27 @@ export function validateOllamaModelTag(raw: string): { ok: true; model: string }
     };
   }
   return { ok: true, model };
+}
+
+/** For POST /api/user-preferences: `null` clears stored model; omitted field should not call this. */
+export function validateOllamaModelForStorage(
+  raw: unknown,
+): { ok: true; ollama_model: string | null } | { ok: false; error: string } {
+  if (raw === null) {
+    return { ok: true, ollama_model: null };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: 'Field "ollama_model" must be a string or null.' };
+  }
+  const t = raw.trim();
+  if (t.length === 0) {
+    return { ok: true, ollama_model: null };
+  }
+  const v = validateOllamaModelTag(t);
+  if (!v.ok) {
+    return { ok: false, error: v.error };
+  }
+  return { ok: true, ollama_model: v.model };
 }
 
 /**
@@ -113,6 +135,30 @@ export function validatePreferredCurrencyForStorage(
     return { ok: false, error: 'preferred_currency must be a 3-letter ISO code (e.g. USD, EUR).' };
   }
   return { ok: true, preferred_currency: t };
+}
+
+const JOB_SOURCE_VALUES: JobSourceKind[] = [
+  "manual",
+  "discovery_indeed",
+  "discovery_linkedin",
+  "discovery_profession",
+];
+
+/** Optional `job_source` on POST /api/pipeline. */
+export function validateJobSourceField(
+  raw: unknown,
+): { ok: true; job_source?: JobSourceKind } | { ok: false; error: string } {
+  if (raw === undefined) {
+    return { ok: true };
+  }
+  if (typeof raw !== "string") {
+    return { ok: false, error: 'Field "job_source" must be a string or omitted.' };
+  }
+  const v = raw.trim() as JobSourceKind;
+  if (!JOB_SOURCE_VALUES.includes(v)) {
+    return { ok: false, error: "Invalid job_source value." };
+  }
+  return { ok: true, job_source: v };
 }
 
 export function validateCvPdfUpload(file: File, bufferByteLength: number): { ok: true } | { ok: false; error: string } {
