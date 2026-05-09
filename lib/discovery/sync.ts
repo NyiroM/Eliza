@@ -205,11 +205,10 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
     const suppressedFilter = await loadSuppressedFilter();
     for (const id of suppressedFilter.ids) evaluated.add(id);
     const tail = await loadDiscoveredJobsTail(DISCOVERY_SYNC_BACKLOG_MAX_JOBS);
+    // Backlog sweep: queue any pending catalog rows in the tail window, not only providers
+    // fetched in this run — otherwise single-provider syncs leave other sources unevaluated.
     const backlog = tail.filter(
-      (j) =>
-        opts.providers.includes(j.provider) &&
-        !evaluated.has(j.id) &&
-        !isSuppressedDiscoveredJob(j, suppressedFilter),
+      (j) => !evaluated.has(j.id) && !isSuppressedDiscoveredJob(j, suppressedFilter),
     );
     await mergeIntoEvalQueue(backlog, evaluated, suppressedFilter, heuristicBlob);
     await pruneEvalQueue(evaluated, suppressedFilter);

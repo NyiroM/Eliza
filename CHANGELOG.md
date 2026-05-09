@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.29] — 2026-05-09
+
+### Fixed
+
+- **Sync backlog scope** — After a fetch, the evaluation queue merge now includes **all** pending jobs in the catalog tail window, not only rows from the provider(s) synced in that request. Single-provider syncs no longer strand unevaluated listings from other sources until you run those providers again.
+- **Eval failure store hygiene** — After each batch, failure rows are pruned for job ids that were marked evaluated (success or permanent failure), so `eval_failures.json` does not retain stale entries indefinitely.
+
 ## [0.4.28] — 2026-05-09
 
 ### Fixed
@@ -104,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
+[0.4.29]: https://github.com/NyiroM/Eliza/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/NyiroM/Eliza/compare/v0.4.27...v0.4.28
 [0.4.27]: https://github.com/NyiroM/Eliza/compare/v0.4.26...v0.4.27
 [0.4.26]: https://github.com/NyiroM/Eliza/compare/v0.4.25...v0.4.26

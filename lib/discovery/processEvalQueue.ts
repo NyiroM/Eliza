@@ -4,7 +4,7 @@ import type { JobSourceKind, PipelineOutput, SalaryAnalysis } from "../../types/
 import { DEFAULT_OLLAMA_MODEL, DISCOVERY_FAILURE_MAX_ATTEMPTS } from "../../config/constants";
 import { runPipelineDetailed } from "../pipeline";
 import { addEvaluatedJobIds, loadEvaluatedJobIds } from "./evaluatedStore";
-import { clearEvalFailure, recordEvalFailure } from "./evalFailureStore";
+import { clearEvalFailure, pruneEvalFailures, recordEvalFailure } from "./evalFailureStore";
 import { buildJobTextForPipeline } from "./jobText";
 import { appendNewMatch } from "./matchesStore";
 import { appendNonMatch } from "./nonMatchesStore";
@@ -178,6 +178,7 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
 
   if (completedIds.length > 0) {
     await addEvaluatedJobIds(completedIds);
+    await pruneEvalFailures(new Set(completedIds));
   }
 
   const queue_remaining = await getEvalQueueLength();
