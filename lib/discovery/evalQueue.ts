@@ -4,6 +4,8 @@ import type { DiscoveredJob, DiscoveryProviderId } from "../../types/discovery";
 import { loadEvaluatedJobIds } from "./evaluatedStore";
 import { isFailureInCooldown, loadEvalFailureMap } from "./evalFailureStore";
 import { DISCOVERY_DIR, DISCOVERY_EVAL_QUEUE_PATH } from "./paths";
+import type { SuppressedFilter } from "./suppressedStore";
+import { isSuppressedDiscoveredJob, loadSuppressedFilter } from "./suppressedStore";
 
 export type QueuedEvalJob = DiscoveredJob & { priority: number };
 
@@ -54,17 +56,22 @@ export async function clearEvalQueue(): Promise<void> {
   await saveQueueFile([]);
 }
 
-/** Merge jobs into the queue (dedupe by id, keep higher priority). Skip ids in `evaluated` or in failure cooldown. */
+/**
+ * Merge jobs into the queue (dedupe by id, keep higher priority).
+ * Skips ids in `evaluatedIds`, listings in `suppressedFilter` (id or canonical URL), and failure cooldown.
+ */
 export async function mergeIntoEvalQueue(
   jobs: DiscoveredJob[],
-  evaluated: ReadonlySet<string>,
+  evaluatedIds: ReadonlySet<string>,
+  suppressedFilter: SuppressedFilter,
   searchKeywords: string,
 ): Promise<number> {
   const failures = await loadEvalFailureMap();
   const now = Date.now();
   const incoming: QueuedEvalJob[] = jobs
     .filter((j) => {
-      if (evaluated.has(j.id)) return false;
+      if (evaluatedIds.has(j.id)) return false;
+      if (isSuppressedDiscoveredJob(j, suppressedFilter)) return false;
       const f = failures.get(j.id);
       if (f && isFailureInCooldown(f, now)) return false;
       return true;
@@ -92,23 +99,30 @@ export async function mergeIntoEvalQueue(
   return incoming.length;
 }
 
-/** Count of jobs still waiting for analysis (excludes evaluated ids and in-cooldown failures). */
+/** Count of jobs still waiting for analysis (excludes evaluated ids, suppressed listings, and in-cooldown failures). */
 export async function getEvalQueueLength(): Promise<number> {
   const evaluated = await loadEvaluatedJobIds();
+  const suppressedFilter = await loadSuppressedFilter();
   const failures = await loadEvalFailureMap();
   const now = Date.now();
   const items = await loadQueueFile();
   return items.filter((q) => {
     if (evaluated.has(q.id)) return false;
+    if (isSuppressedDiscoveredJob(q, suppressedFilter)) return false;
     const f = failures.get(q.id);
     if (f && isFailureInCooldown(f, now)) return false;
     return true;
   }).length;
 }
 
-/** Remove items whose ids are already evaluated (cleanup). */
-export async function pruneEvalQueue(evaluated: ReadonlySet<string>): Promise<void> {
-  const items = (await loadQueueFile()).filter((q) => !evaluated.has(q.id));
+/** Remove queue items that are evaluated or user-suppressed (by id or canonical URL). */
+export async function pruneEvalQueue(
+  evaluatedIds: ReadonlySet<string>,
+  suppressedFilter: SuppressedFilter,
+): Promise<void> {
+  const items = (await loadQueueFile()).filter(
+    (q) => !evaluatedIds.has(q.id) && !isSuppressedDiscoveredJob(q, suppressedFilter),
+  );
   await saveQueueFile(items);
 }
 
@@ -117,14 +131,19 @@ export async function pruneEvalQueue(evaluated: ReadonlySet<string>): Promise<vo
  * Skips evaluated ids and items still inside their failure cooldown.
  * Caller must mark evaluated (or record a failure) after each pipeline run.
  */
-export async function takeFromEvalQueue(max: number, evaluated: ReadonlySet<string>): Promise<QueuedEvalJob[]> {
+export async function takeFromEvalQueue(
+  max: number,
+  evaluatedIds: ReadonlySet<string>,
+  suppressedFilter: SuppressedFilter,
+): Promise<QueuedEvalJob[]> {
   const failures = await loadEvalFailureMap();
   const now = Date.now();
   const all = await loadQueueFile();
   const eligible: QueuedEvalJob[] = [];
   const blocked: QueuedEvalJob[] = [];
   for (const q of all) {
-    if (evaluated.has(q.id)) continue;
+    if (evaluatedIds.has(q.id)) continue;
+    if (isSuppressedDiscoveredJob(q, suppressedFilter)) continue;
     const f = failures.get(q.id);
     if (f && isFailureInCooldown(f, now)) {
       blocked.push(q);

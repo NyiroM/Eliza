@@ -12,7 +12,7 @@ import { loadDiscoveredJobsAll } from "../../../../lib/discovery/jobStore";
 import { resetEvaluatedJobIds } from "../../../../lib/discovery/evaluatedStore";
 import { clearAllNewMatches } from "../../../../lib/discovery/matchesStore";
 import { clearAllNonMatches } from "../../../../lib/discovery/nonMatchesStore";
-import { loadSuppressedJobIds } from "../../../../lib/discovery/suppressedStore";
+import { loadSuppressedFilter } from "../../../../lib/discovery/suppressedStore";
 import { clearDiscoveryProgress, progressAwaitingClientDrain, progressQueueing, setDiscoveryProgress } from "../../../../lib/discovery/progress";
 import { discoveryTerminalLog } from "../../../../lib/discovery/discoveryTerminalLog";
 import { processEvalQueue } from "../../../../lib/discovery/processEvalQueue";
@@ -120,9 +120,9 @@ export async function POST(request: NextRequest) {
       await resetEvaluatedJobIds();
       await clearEvalQueue();
 
-      const suppressed = await loadSuppressedJobIds();
-      const queued = await mergeIntoEvalQueue(jobs, suppressed, heuristicBlob);
-      await pruneEvalQueue(suppressed);
+      const suppressedFilter = await loadSuppressedFilter();
+      const queued = await mergeIntoEvalQueue(jobs, new Set<string>(), suppressedFilter, heuristicBlob);
+      await pruneEvalQueue(new Set<string>(), suppressedFilter);
 
       discoveryTerminalLog(`phase=reevaluate queued=${queued} jobs=${jobs.length}`);
 

@@ -12,7 +12,7 @@ import { loadDiscoverySettings } from "./settings";
 import { discoveryEvalQuarterIndex, discoveryTerminalLog } from "./discoveryTerminalLog";
 import { getEvalQueueLength, returnToEvalQueue, takeFromEvalQueue } from "./evalQueue";
 import { progressAnalyzing, progressDraining } from "./progress";
-import { loadSuppressedJobIds } from "./suppressedStore";
+import { loadSuppressedFilter } from "./suppressedStore";
 
 function salaryForecastSnapshot(s: SalaryAnalysis | null | undefined): DiscoverySalaryForecastSnapshot | undefined {
   if (!s) return undefined;
@@ -78,9 +78,9 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   const threshold = Math.min(100, Math.max(0, settings.match_notify_threshold_percent));
   const model = opts.model.trim() || DEFAULT_OLLAMA_MODEL;
   const evaluated = await loadEvaluatedJobIds();
-  const suppressed = await loadSuppressedJobIds();
-  for (const id of suppressed) evaluated.add(id);
-  const batch = await takeFromEvalQueue(opts.maxItems, evaluated);
+  const suppressedFilter = await loadSuppressedFilter();
+  for (const id of suppressedFilter.ids) evaluated.add(id);
+  const batch = await takeFromEvalQueue(opts.maxItems, evaluated, suppressedFilter);
 
   let newHighMatches = 0;
   let processed = 0;

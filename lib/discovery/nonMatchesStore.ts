@@ -8,6 +8,25 @@ export async function appendNonMatch(row: DiscoveryNonMatchRow): Promise<void> {
   await appendFile(DISCOVERY_NON_MATCHES_PATH, `${JSON.stringify(row)}\n`, "utf-8");
 }
 
+/** First matching row for a job_id (scan full file). */
+export async function findNonMatchRowByJobId(jobId: string): Promise<DiscoveryNonMatchRow | null> {
+  try {
+    const raw = await readFile(DISCOVERY_NON_MATCHES_PATH, "utf-8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line) as DiscoveryNonMatchRow;
+        if (row.job_id === jobId) return row;
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no file */
+  }
+  return null;
+}
+
 /** Removes all lines whose JSON job_id matches (rewrites non_matches.jsonl). */
 export async function removeNonMatchesByJobId(jobId: string): Promise<{ removed: number }> {
   await mkdir(DISCOVERY_DIR, { recursive: true });

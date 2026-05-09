@@ -8,6 +8,25 @@ export async function appendNewMatch(row: DiscoveryMatchRow): Promise<void> {
   await appendFile(DISCOVERY_NEW_MATCHES_PATH, `${JSON.stringify(row)}\n`, "utf-8");
 }
 
+/** First matching row for a job_id (scan full file). */
+export async function findNewMatchRowByJobId(jobId: string): Promise<DiscoveryMatchRow | null> {
+  try {
+    const raw = await readFile(DISCOVERY_NEW_MATCHES_PATH, "utf-8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line) as DiscoveryMatchRow;
+        if (row.job_id === jobId) return row;
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no file */
+  }
+  return null;
+}
+
 /** Removes all lines whose JSON job_id matches (rewrites new_matches.jsonl). */
 export async function removeNewMatchesByJobId(jobId: string): Promise<{ removed: number }> {
   await mkdir(DISCOVERY_DIR, { recursive: true });

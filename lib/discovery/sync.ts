@@ -6,7 +6,7 @@ import { getKeywordsForSync } from "./keywordSync";
 import { loadDiscoverySettings, patchProviderState, saveDiscoverySettings } from "./settings";
 import { getEvalQueueLength, mergeIntoEvalQueue, pruneEvalQueue } from "./evalQueue";
 import { loadEvaluatedJobIds } from "./evaluatedStore";
-import { loadSuppressedJobIds } from "./suppressedStore";
+import { isSuppressedDiscoveredJob, loadSuppressedFilter } from "./suppressedStore";
 import { loadDupeIndex } from "./dupeIndexStore";
 import { processEvalQueue } from "./processEvalQueue";
 import {
@@ -198,12 +198,17 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
     });
 
     const evaluated = await loadEvaluatedJobIds();
-    const suppressed = await loadSuppressedJobIds();
-    for (const id of suppressed) evaluated.add(id);
+    const suppressedFilter = await loadSuppressedFilter();
+    for (const id of suppressedFilter.ids) evaluated.add(id);
     const tail = await loadDiscoveredJobsTail(600);
-    const backlog = tail.filter((j) => opts.providers.includes(j.provider) && !evaluated.has(j.id));
-    await mergeIntoEvalQueue(backlog, evaluated, heuristicBlob);
-    await pruneEvalQueue(evaluated);
+    const backlog = tail.filter(
+      (j) =>
+        opts.providers.includes(j.provider) &&
+        !evaluated.has(j.id) &&
+        !isSuppressedDiscoveredJob(j, suppressedFilter),
+    );
+    await mergeIntoEvalQueue(backlog, evaluated, suppressedFilter, heuristicBlob);
+    await pruneEvalQueue(evaluated, suppressedFilter);
     const queueAfterMerge = await getEvalQueueLength();
     discoveryTerminalLog(`phase=queue_ready backlog_candidates=${backlog.length} queue=${queueAfterMerge}`);
 
