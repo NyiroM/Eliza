@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.26] — 2026-05-09
+
+### Added
+
+- **Discovery re-evaluate** — `POST /api/discovery/reevaluate` re-queues catalog jobs, clears evaluated IDs and match lists as configured, and merges the evaluation queue for a full pass without re-fetching listings.
+- **Cross-provider deduplication** — fingerprinting (`lib/discovery/dupeFingerprint.ts`) and persisted index (`lib/discovery/dupeIndexStore.ts`, `storage/discovery/dupe_index.json`) so the same role across providers keeps one catalog row; optional verification script `scripts/verify-discovery-dedupe.mts`.
+- **Suppressed listings** — trash / hide persists IDs (`lib/discovery/suppressedStore.ts`); sync, re-evaluate, and queue respect suppressed jobs.
+- **Discovery UI** — shared button tokens (`lib/ui/dashboardButtons.ts`); match/non-match rows show **company and title**; dashboard copy trimmed; Tailwind `@source` for `lib/**/*.ts` utilities in `app/globals.css`.
+- **Constraint tactics** — storage and pipeline alignment for merged `strong_preference` semantics (replaces redundant veto flags in UI and API).
+
+### Changed
+
+- **Salary Oracle** — improved constraint floor parsing, annual posted salary to monthly handling, and Hays benchmark currency handling (`lib/salary-oracle.ts`).
+- **Lint / hygiene** — removed unused symbols across `ollama`, pipeline imports, scripts, and scoring helpers; `next-env.d.ts` routes types path aligned with Next 16.
+
+### Fixed
+
+- Discovery progress and matches APIs stay consistent with queue stats and auto-refresh behavior in the hub panel.
+
 ## [0.4.25] — 2026-05-04
 
 ### Added
@@ -66,5 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
+[0.4.26]: https://github.com/NyiroM/Eliza/compare/v0.4.25...v0.4.26
 [0.4.25]: https://github.com/NyiroM/Eliza/compare/v0.4.24...v0.4.25
 [0.4.24]: https://github.com/NyiroM/Eliza/compare/v0.2.0...v0.4.24

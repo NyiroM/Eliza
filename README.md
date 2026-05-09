@@ -22,10 +22,14 @@
 
 The dashboard **Discovery Hub** panel drives listing ingestion and batch evaluation:
 
-- **Providers** — toggle per source; sync pulls recent rows into a **local catalog** (deduped) using **Playwright** (Chromium) where the site needs a real browser.
+- **Providers** — toggle per source; sync pulls recent rows into a **local catalog** using **Playwright** (Chromium) where the site needs a real browser. Listings are **deduped within a run** and **across providers** via a persisted fingerprint index (`storage/discovery/dupe_index.json`).
 - **Keywords** — comma-separated search phrases; optional **Ollama**-suggested phrases you can approve into the active keyword set.
-- **Queue & progress** — jobs are evaluated with the same **pipeline** as a pasted posting; rows above your match threshold (and not vetoed) surface under **New matches**.
-- **API** — routes under **`app/api/discovery/`** (`sync`, `state`, `settings`, `matches`, `process-queue`, `progress`, …). Domain helpers for synonyms and constraint tactics live under **`app/api/domain/`**.
+- **Queue & progress** — jobs are evaluated with the same **pipeline** as a pasted posting; rows above your match threshold (and not vetoed) surface under **New matches**, with **company and title** on each row. The panel can **refresh match lists** when live stats change.
+- **Re-evaluate** — **AI re-evaluate** (or `POST /api/discovery/reevaluate`) re-queues the catalog for scoring without a full re-fetch; useful after CV or constraint changes.
+- **Suppressed listings** — jobs you remove with the trash control are stored as suppressed and are skipped on sync, re-evaluate, and queue processing until cleared.
+- **API** — routes under **`app/api/discovery/`** (`sync`, `state`, `settings`, `matches`, `process-queue`, `progress`, `reevaluate`, …). Domain helpers for synonyms and constraint tactics live under **`app/api/domain/`**.
+
+**Optional server tuning** (see also comments in **`config/constants.ts`**): `ELIZA_DISCOVERY_SYNC_EVAL_BATCH`, `ELIZA_DISCOVERY_QUEUE_DRAIN_BATCH`, `ELIZA_DISCOVERY_MAX_SEED_PHRASES`, `ELIZA_DISCOVERY_PLAYWRIGHT` (set `0` for HTTP-only / RSS-style paths where supported), plus Profession.hu speed knobs `ELIZA_PROFESSION_FAST_NAV`, `ELIZA_PROFESSION_LITE_SETTLE`, `ELIZA_PROFESSION_DETAIL_VISITS`, `ELIZA_PROFESSION_FETCH_TIMEOUT_MS`.
 
 **One-time setup for browser sync:** after `npm install`, install the Playwright browser bundle once:
 
@@ -149,11 +153,12 @@ On a typical **16 GB VRAM** workstation with **`deepseek-r1:8b`** pulled in Olla
 | Path | Purpose |
 |------|---------|
 | `app/` | App Router pages, dashboard UI, API route handlers |
-| `app/api/discovery/` | Discovery Hub sync, queue, matches, settings, keyword suggestions |
+| `app/api/discovery/` | Discovery Hub sync, queue, matches, settings, keyword suggestions, re-evaluate |
 | `app/api/domain/` | Skill synonym and constraint-tactic JSON used by parsers and storage |
 | `lib/` | Ollama client, parsers, generators, validation, storage |
 | `lib/pipeline/` | Staged pipeline implementation (invoked from `lib/pipeline.ts`) |
-| `lib/discovery/` | Provider fetchers, catalog, queue, Playwright helpers |
+| `lib/discovery/` | Provider fetchers, catalog, queue, cross-provider dedupe, suppressed IDs, Playwright helpers |
+| `lib/ui/` | Shared dashboard tokens (e.g. Tailwind button class groups) |
 | `lib/cv/`, `lib/benchmark/`, `lib/logging/` | CV helpers, optional stress benchmarks, structured logs |
 | `scripts/` | Verification and tuning scripts (`*.mts`) |
 | `types/` | Shared contracts (`PipelineOutput`, `discovery`, …) |
@@ -247,6 +252,7 @@ Load **`apps/extension/dist`** as an unpacked extension. Set **`VITE_ELIZA_API_U
 | `npm run test:indeed-job-url` | Indeed job URL / listing assumptions verifier |
 | `npm run test:job-id-canonicalization` | Job id canonicalization verifier |
 | `npm run benchmark:ollama-tuning` | Local Ollama matrix tuning; writes under **`benchmarks/`** (ignored by git) |
+| `npx tsx scripts/verify-discovery-dedupe.mts` | Sanity-check cross-provider duplicate skipping (fixture-style) |
 | `npx tsc --noEmit` | Typecheck (also run in CI on PRs to `main`) |
 
 ---
