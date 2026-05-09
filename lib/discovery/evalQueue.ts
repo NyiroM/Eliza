@@ -99,8 +99,23 @@ export async function mergeIntoEvalQueue(
   return incoming.length;
 }
 
-/** Count of jobs still waiting for analysis (excludes evaluated ids, suppressed listings, and in-cooldown failures). */
+/**
+ * Rows still present in the eval queue file that are not evaluated and not suppressed.
+ * Includes failure-cooldown rows (they are still “pending” for this drain session).
+ */
 export async function getEvalQueueLength(): Promise<number> {
+  const evaluated = await loadEvaluatedJobIds();
+  const suppressedFilter = await loadSuppressedFilter();
+  const items = await loadQueueFile();
+  return items.filter((q) => {
+    if (evaluated.has(q.id)) return false;
+    if (isSuppressedDiscoveredJob(q, suppressedFilter)) return false;
+    return true;
+  }).length;
+}
+
+/** Subset of {@link getEvalQueueLength} that can run immediately (not inside failure cooldown). */
+export async function getEvalQueueActionableLength(): Promise<number> {
   const evaluated = await loadEvaluatedJobIds();
   const suppressedFilter = await loadSuppressedFilter();
   const failures = await loadEvalFailureMap();

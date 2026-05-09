@@ -99,6 +99,7 @@ export async function POST(request: NextRequest) {
         processed: result.processed,
         new_high_matches: result.new_high_matches,
         queue_remaining: result.queue_remaining,
+        actionable_remaining: result.actionable_remaining,
         jobs_evaluated: result.jobs_evaluated,
         failures_pending_retry: result.failures_pending_retry,
         failures_permanent: result.failures_permanent,

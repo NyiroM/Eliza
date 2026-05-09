@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.30] — 2026-05-09
+
+### Fixed
+
+- **Eval queue length vs failure cooldown** — `getEvalQueueLength` now counts rows still on disk that are not evaluated/suppressed, **including** jobs waiting out `eval_failures` cooldown. Previously the count could drop to 0 while cooldown rows remained, so drain could stop early, `/api/discovery/progress` could clear “awaiting drain”, and `markDiscoveryAwaitingDrain(false)` could run too soon.
+- **Drain stall false positives** — `POST /api/discovery/process-queue` returns **`actionable_remaining`** (items not in failure cooldown). The hub drain loop only treats “stuck” when `actionable_remaining > 0`, so cooldown-only waits no longer trip the Ollama stall error after three no-op rounds.
+- **Drain loop** — When everything left is cooldown-blocked, the hub stops after one round (with a clear message) instead of burning the max round budget on no-op `process-queue` calls.
+
 ## [0.4.29] — 2026-05-09
 
 ### Fixed
@@ -111,6 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
+[0.4.30]: https://github.com/NyiroM/Eliza/compare/v0.4.29...v0.4.30
 [0.4.29]: https://github.com/NyiroM/Eliza/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/NyiroM/Eliza/compare/v0.4.27...v0.4.28
 [0.4.27]: https://github.com/NyiroM/Eliza/compare/v0.4.26...v0.4.27

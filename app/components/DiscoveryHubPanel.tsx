@@ -240,6 +240,8 @@ type ProcessQueueResponse = {
   locked?: boolean;
   new_high_matches?: number;
   queue_remaining?: number;
+  /** Jobs that can run immediately (excludes failure-cooldown-only rows). */
+  actionable_remaining?: number;
   jobs_evaluated?: number;
   failures_pending_retry?: number;
   failures_permanent?: number;
@@ -261,6 +263,8 @@ async function discoveryDrainEvalQueue(opts: {
       totalFailuresPermanent: number;
       remaining: number;
       stalled: boolean;
+      /** All remaining rows are in eval-failure cooldown (nothing to run until later). */
+      waitingFailureCooldown?: boolean;
     }
   | { ok: false; error: string; remaining: number }
 > {
@@ -294,7 +298,12 @@ async function discoveryDrainEvalQueue(opts: {
     totalFailuresPendingRetry += pd.failures_pending_retry ?? 0;
     totalFailuresPermanent += pd.failures_permanent ?? 0;
     const next = pd.queue_remaining ?? 0;
-    if (next === lastRem && (pd.jobs_evaluated ?? 0) === 0) {
+    const actionable = pd.actionable_remaining;
+    const couldBeHardStall =
+      next === lastRem &&
+      (pd.jobs_evaluated ?? 0) === 0 &&
+      (actionable !== undefined ? actionable > 0 : next > 0);
+    if (couldBeHardStall) {
       stallCount += 1;
       if (stallCount >= 3) {
         return {
@@ -310,6 +319,18 @@ async function discoveryDrainEvalQueue(opts: {
     remaining = next;
     await opts.onRoundComplete?.();
     rounds += 1;
+    if (next > 0 && pd.actionable_remaining === 0) {
+      return {
+        ok: true,
+        totalStrictWins,
+        totalPipelineSuccess,
+        totalFailuresPendingRetry,
+        totalFailuresPermanent,
+        remaining: next,
+        stalled: false,
+        waitingFailureCooldown: true,
+      };
+    }
   }
   return {
     ok: true,
@@ -592,6 +613,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             );
             return;
           }
+          if (drain.waitingFailureCooldown) {
+            setMessage(
+              `${drain.remaining} job(s) still queued but waiting out pipeline failure cooldown — try Run sync or drain again in a few minutes.`,
+            );
+            return;
+          }
           setMessage(
             `Evaluation queue cleared (${drain.totalPipelineSuccess} full Veto run(s), ${drain.totalStrictWins} high matches this drain). Click Run sync again when ready.`,
           );
@@ -629,6 +656,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           if (drain.stalled) {
             setMessage(
               `${data.jobs_added ?? 0} job(s) added. Queue drain stopped after ${DISCOVERY_DRAIN_MAX_ROUNDS} rounds with ${drain.remaining} job(s) left — run sync again to continue.`,
+            );
+            return;
+          }
+          if (drain.waitingFailureCooldown) {
+            setMessage(
+              `${data.jobs_added ?? 0} job(s) added. ${drain.remaining} job(s) are in failure retry cooldown — continue draining later.`,
             );
             return;
           }
@@ -741,6 +774,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           setMessage(`${drain.remaining} job(s) still queued (drain safety limit). Try again shortly.`);
           return;
         }
+        if (drain.waitingFailureCooldown) {
+          setMessage(
+            `${drain.remaining} job(s) queued but in failure cooldown — try drain again after the cooldown window.`,
+          );
+          return;
+        }
         setMessage("Evaluation queue cleared. Run AI reevaluate again when ready.");
         return;
       }
@@ -774,6 +813,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         if (drain.stalled) {
           setMessage(
             `Queue drain stopped after ${DISCOVERY_DRAIN_MAX_ROUNDS} rounds with ${drain.remaining} job(s) left — run AI reevaluate again to continue.`,
+          );
+          return;
+        }
+        if (drain.waitingFailureCooldown) {
+          setMessage(
+            `AI reevaluate: ${drain.remaining} job(s) remain in failure retry cooldown — drain again later.`,
           );
           return;
         }
@@ -845,6 +890,10 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         if (drain.remaining === 0) {
           setMessage(
             `Várólista kiürült (${drain.totalPipelineSuccess} pipeline futás, ${drain.totalStrictWins} erős találat).`,
+          );
+        } else if (drain.waitingFailureCooldown) {
+          setMessage(
+            `${drain.remaining} állás még cooldownon (újrapróbálkozás) — később futtasd újra a drain-t vagy a syncet.`,
           );
         } else if (drain.stalled) {
           setMessage(

@@ -10,7 +10,12 @@ import { appendNewMatch } from "./matchesStore";
 import { appendNonMatch } from "./nonMatchesStore";
 import { loadDiscoverySettings } from "./settings";
 import { discoveryEvalQuarterIndex, discoveryTerminalLog } from "./discoveryTerminalLog";
-import { getEvalQueueLength, returnToEvalQueue, takeFromEvalQueue } from "./evalQueue";
+import {
+  getEvalQueueActionableLength,
+  getEvalQueueLength,
+  returnToEvalQueue,
+  takeFromEvalQueue,
+} from "./evalQueue";
 import { progressAnalyzing, progressDraining } from "./progress";
 import { loadSuppressedFilter } from "./suppressedStore";
 
@@ -62,6 +67,8 @@ export type ProcessEvalQueueResult = {
   new_high_matches: number;
   jobs_evaluated: number;
   queue_remaining: number;
+  /** Items that could run now (excludes failure-cooldown-only rows). */
+  actionable_remaining: number;
   /** Jobs whose pipeline run failed this round but will retry next sync. */
   failures_pending_retry: number;
   /** Jobs whose pipeline run failed and reached max attempts (now in evaluated_ids.json). */
@@ -181,9 +188,12 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
     await pruneEvalFailures(new Set(completedIds));
   }
 
-  const queue_remaining = await getEvalQueueLength();
+  const [queue_remaining, actionable_remaining] = await Promise.all([
+    getEvalQueueLength(),
+    getEvalQueueActionableLength(),
+  ]);
   discoveryTerminalLog(
-    `phase=eval_batch_done mode=${phase} evaluated=${processed} high_matches=${newHighMatches} queue_remaining=${queue_remaining} retry=${failuresPendingRetry} permanent_fail=${failuresPermanent}`,
+    `phase=eval_batch_done mode=${phase} evaluated=${processed} high_matches=${newHighMatches} queue_remaining=${queue_remaining} actionable=${actionable_remaining} retry=${failuresPendingRetry} permanent_fail=${failuresPermanent}`,
   );
 
   return {
@@ -191,6 +201,7 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
     new_high_matches: newHighMatches,
     jobs_evaluated: processed,
     queue_remaining,
+    actionable_remaining,
     failures_pending_retry: failuresPendingRetry,
     failures_permanent: failuresPermanent,
   };
