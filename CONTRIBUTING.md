@@ -6,14 +6,16 @@ Thank you for your interest in improving ELIZA. This project is a small Next.js 
 
 1. Fork the repository and clone your fork.
 2. Install dependencies: `npm install`
-3. Copy `.env.example` to `.env.local` if you need non-default Ollama URLs.
-4. Run `npm run dev` and ensure [Ollama](https://ollama.com) is available for local LLM calls.
+3. Copy `.env.example` to `.env.local` if you need non-default Ollama URLs or Discovery Hub overrides (optional keys are documented in that file).
+4. **Discovery Hub / Playwright:** after install, run `npx playwright install chromium` once if you will exercise browser-based sync locally.
+5. Run `npm run dev` and ensure [Ollama](https://ollama.com) is available for local LLM calls.
 
 ## Pull requests
 
 - Keep changes focused on a single concern (feature, fix, or docs).
 - Run `npx tsc --noEmit` before opening a PR.
 - Run `npm run lint` when you touch TypeScript or React code.
+- Run `npm run build` when you change `app/`, `lib/`, or Next/Tailwind config so type and compile issues surface early.
 - Describe **what** changed and **why** in the PR description.
 
 ## Documentation maintenance checklist
@@ -22,10 +24,13 @@ When your change touches runtime defaults or user-facing behavior, update docs i
 
 - **Version bump**: keep `package.json`, `package-lock.json`, and `CHANGELOG.md` aligned.
 - **Model/runtime defaults**: if default Ollama model changes, update `README.md` install/run examples.
-- **Scripts**: if npm scripts are added/renamed, update the scripts table in `README.md`.
+- **Scripts**: if npm scripts are added/renamed, update the scripts table in `README.md` (or document one-off `npx tsx scripts/...` invocations there).
 - **Major feature behavior**: document extraction/fallback/safety logic changes (for example Salary Oracle rules) in `README.md` and `CHANGELOG.md`.
 - **API response shape**: if `types/` contracts change, ensure dashboard/extension docs and examples still reflect actual fields.
-- **Discovery Hub / Playwright**: if sync behavior changes, update **`README.md`** (Discovery Hub section and prerequisites). Do not commit files under **`benchmarks/*.json`** or **`benchmarks/*.log`** — they are gitignored local tuning outputs.
+- **Discovery Hub / Playwright**: if sync, queue, **re-evaluate**, **cross-provider deduplication**, **suppressed listings**, or match-row shape changes, update **`README.md`** (Discovery Hub section and prerequisites) and add a **`CHANGELOG.md`** entry. New or renamed **server env vars** for discovery should appear in **`.env.example`** (commented) and briefly in README if operators need them.
+- **Tailwind utilities from `lib/`**: if you rely on class strings built in `lib/**/*.ts`, ensure `app/globals.css` still **`@source`** those paths so production CSS includes them.
+- **Agent onboarding**: significant workflow or layout changes should be reflected in **`AGENTS.md`** so automated assistants stay aligned.
+- Do not commit files under **`benchmarks/*.json`** or **`benchmarks/*.log`** — they are gitignored local tuning outputs. Do not commit anything under **`storage/`** (including **`storage/discovery/*.json`**).
 
 ## Extension
 
