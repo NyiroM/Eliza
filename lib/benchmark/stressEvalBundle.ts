@@ -193,9 +193,9 @@ export const STRESS_SYNONYM_PAIRS: Array<{ canonical: string; aliases: string[] 
 
 export const STRESS_TACTICS: StoredConstraintTactics = {
   tactics: {
-    location: "soft_only",
+    location: "strong_preference",
     remote_zone: "default",
-    compensation: "never_veto",
+    compensation: "strong_preference",
   },
   updated_at: new Date().toISOString(),
 };

@@ -3,8 +3,8 @@
  * Import from here instead of scattering magic numbers across `lib/`.
  */
 
-/** Default Ollama model tag when none is provided or discovery fails. */
-export const DEFAULT_OLLAMA_MODEL = "deepseek-r1:8b";
+/** Default Ollama model tag when none is provided or discovery fails (dashboard can override via user preferences). */
+export const DEFAULT_OLLAMA_MODEL = "gemma4:e4b";
 
 /** Ollama client HTTP timeout (all `/api/*` calls): see `OLLAMA_TIMEOUT` in `lib/llm/ollama.ts`. */
 

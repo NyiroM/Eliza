@@ -623,7 +623,7 @@ ${slice}`;
   if (strictLlm) {
     const data = await generateJsonWithOllamaStrict<LangPrepResult>(prompt, {
       model: ollamaModel,
-      role: "analysis",
+      role: "extract_cv",
     });
     const text =
       typeof data.job_text_for_extraction === "string" ? data.job_text_for_extraction.trim() : "";
@@ -641,7 +641,7 @@ ${slice}`;
 
   const llm = await generateJsonWithOllama<LangPrepResult>(prompt, fallback, {
     model: ollamaModel,
-    role: "analysis",
+    role: "extract_cv",
   });
   const data = llm.data;
   if (typeof data.job_text_for_extraction !== "string" || !data.job_text_for_extraction.trim()) {
@@ -745,7 +745,7 @@ ${slice}`;
   if (strictLlm) {
     const data = await generateJsonWithOllamaStrict<EntityExtractionResult>(prompt, {
       model: ollamaModel,
-      role: "analysis",
+      role: "extract_cv",
     });
     return {
       fields: sanitizeJobResult(data, fallbackFields),
@@ -756,7 +756,7 @@ ${slice}`;
   const llm = await generateJsonWithOllama<EntityExtractionResult>(
     prompt,
     jobFieldsToEntityFallback(fallbackFields),
-    { model: ollamaModel, role: "analysis" },
+    { model: ollamaModel, role: "extract_cv" },
   );
 
   return {

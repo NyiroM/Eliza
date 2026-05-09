@@ -45,21 +45,32 @@ export type DiscoveredJob = {
   discovered_at: string;
 };
 
+/** Salary Oracle output attached to discovery rows (same run as Veto pipeline). */
+export type DiscoverySalaryForecastSnapshot = {
+  match_status: "above_limit" | "borderline" | "below_limit";
+  source: "posted" | "market_benchmark";
+  rationale: string;
+};
+
 export type DiscoveryMatchRow = {
   job_id: string;
   provider: DiscoveryProviderId;
+  company: string | null;
   title: string;
   url: string;
   fit_score: number;
   constraint_veto: boolean;
   evaluated_at: string;
   one_sentence_summary?: string;
+  /** Set when `runSalaryOracle` returned analysis during this evaluation (manual/auto sync + queue drain). */
+  salary_forecast?: DiscoverySalaryForecastSnapshot;
 };
 
 /** Evaluated listing that did not qualify for New matches (veto and/or below threshold). */
 export type DiscoveryNonMatchRow = {
   job_id: string;
   provider: DiscoveryProviderId;
+  company: string | null;
   title: string;
   url: string;
   fit_score: number;
@@ -69,6 +80,7 @@ export type DiscoveryNonMatchRow = {
   one_sentence_summary?: string;
   /** Plain explanation of why this row is not under New matches. */
   not_match_reason: string;
+  salary_forecast?: DiscoverySalaryForecastSnapshot;
 };
 
 export type DiscoverySyncResult = {
@@ -85,6 +97,8 @@ export type DiscoverySyncResult = {
   errors: Partial<Record<DiscoveryProviderId, string>>;
   /** Per-provider count of fetched jobs whose ids were already known (existing jobs.jsonl or this batch). */
   duplicates_skipped?: Partial<Record<DiscoveryProviderId, number>>;
+  /** Per-provider count of jobs skipped as cross-provider duplicates (precision-first fingerprint). */
+  cross_provider_duplicates_skipped?: Partial<Record<DiscoveryProviderId, number>>;
   /** Jobs that failed the pipeline this run but will retry next sync. */
   failures_pending_retry?: number;
   /** Jobs that failed the pipeline and have hit the max retry budget. */
@@ -118,6 +132,12 @@ export type DiscoveryProgressState = {
   /** ms spent on the last completed seed phrase fetch. */
   fetchPhraseDurationMs?: number;
   sessionLiveStats?: DiscoverySessionLiveStats;
+  /** ISO time when this discovery sync POST began (survives phase changes until cleared). */
+  pipeline_run_started_at?: string;
+  /** ISO time when the finest-grained step began (current seed phrase fetch or current eval job). */
+  step_started_at?: string;
+  /** ISO time when the current `processEvalQueue` batch started (job 1 of this batch). */
+  eval_batch_started_at?: string;
 };
 
 export type DiscoveryProcessQueueResult = {

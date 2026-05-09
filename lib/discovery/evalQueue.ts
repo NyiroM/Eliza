@@ -50,6 +50,10 @@ async function saveQueueFile(items: QueuedEvalJob[]): Promise<void> {
   await writeFile(DISCOVERY_EVAL_QUEUE_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
+export async function clearEvalQueue(): Promise<void> {
+  await saveQueueFile([]);
+}
+
 /** Merge jobs into the queue (dedupe by id, keep higher priority). Skip ids in `evaluated` or in failure cooldown. */
 export async function mergeIntoEvalQueue(
   jobs: DiscoveredJob[],

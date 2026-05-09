@@ -93,7 +93,6 @@ function isTrulySolitaryRole(jobText: string): boolean {
  */
 export function collectConstraintSignalHints(constraints: string[], jobText: string): string[] {
   const hints: string[] = [];
-  const jt = jobText.toLowerCase();
 
   if (hasNoPmConstraint(constraints) && isPmRoleJob(jobText)) {
     hints.push(

@@ -1,7 +1,6 @@
 // scripts/benchmark-ollama-tuning.mts
-// Gemma 4 e4b Absolute Limits: gemma4:e4b only; matrix Cell_Factory / Robot / Creative / Thin_Context with fixed Ollama options.
-// failed_responses.log: only Cell_Robot + Cell_Creative (parse or HTTP); Factory/Thin/baseline → console.warn + raw_head.
-// tuning_results.json: benchmarkMode gemma4_e4b_absolute_limits; matrix[].is_factory_default marks Cell_Factory.
+// Gemma 4 e4b: matrix Cell_Robot_Vibrant / Cell_Robot_Flow_V2 / Cell_Robot_Stiff — num_ctx 16384; 0.08–0.1 “heat” vs T=0 anchor.
+// failed_responses.log: all matrix cells on parse=false or HTTP failure (full raw). Baseline failures → console.warn + raw_head only.
 
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -55,15 +54,12 @@ const SYSTEM_APPENDIX_CHARS_EST = 4500;
 const LOW_ACCURACY_FIT_DELTA = 20;
 const RAW_LOG_MAX_CHARS = 120_000;
 
-/** Gemma 4 e4b Absolute Limits — exact Ollama `options` on the wire (not overridden by env). */
-const PROTOCOL_NUM_CTX_FULL = 16_384;
-const PROTOCOL_NUM_CTX_THIN = 8192;
+/** Gemma 4 e4b — exact Ollama `options` on the wire (num_ctx fixed at 16k; not overridden by env for matrix). */
+const PROTOCOL_NUM_CTX = 16_384;
 const PROTOCOL_NUM_PREDICT = 2048;
 const PROTOCOL_NUM_GPU = 99;
 
-/** Context sizes for truncation warnings only (defaults match protocol). */
-const BENCH_NUM_CTX = Number(process.env.BENCHMARK_NUM_CTX ?? PROTOCOL_NUM_CTX_FULL);
-const BENCH_THIN_NUM_CTX = Number(process.env.BENCHMARK_THIN_NUM_CTX ?? PROTOCOL_NUM_CTX_THIN);
+const BENCH_NUM_CTX = Number(process.env.BENCHMARK_NUM_CTX ?? PROTOCOL_NUM_CTX);
 const BENCH_NUM_PREDICT = PROTOCOL_NUM_PREDICT;
 const HEAVY_LATENCY_SKIP_MS = Number(process.env.BENCHMARK_HEAVY_LATENCY_SKIP_MS ?? 45_000);
 const REASONING_DEPTH_RATIO_MIN = Number(process.env.BENCHMARK_REASONING_DEPTH_RATIO_MIN ?? 1.15);
@@ -221,72 +217,44 @@ Do you have questions regarding the recruitment process or alike? Please visit o
 /** Only gemma4:e4b (BF16 tag as installed in Ollama). */
 const MATRIX_MODELS = ["gemma4:e4b"] as const;
 
-type MatrixCellId = "Cell_Factory" | "Cell_Robot" | "Cell_Creative" | "Cell_Thin_Context";
+type MatrixCellId = "Cell_Robot_Vibrant" | "Cell_Robot_Flow_V2" | "Cell_Robot_Stiff";
 
 type MatrixBenchCell = {
   cellId: MatrixCellId;
-  /** When true, tuning_results marks this row as the factory-default sampling run (no temp/top_k in request). */
-  is_factory_sampling_row: boolean;
   description: string;
 };
 
 const MATRIX_CELLS: MatrixBenchCell[] = [
   {
-    cellId: "Cell_Factory",
-    is_factory_sampling_row: true,
+    cellId: "Cell_Robot_Vibrant",
     description:
-      "Cell_Factory: only num_ctx=16384, num_predict=2048, num_gpu=99 — no other sampling keys (Ollama runner defaults).",
+      "Cell_Robot_Vibrant: num_ctx=16384, num_predict=2048, num_gpu=99, temperature=0.08, top_k=20, repeat_penalty=1.15 (lower bound of expressive zone).",
   },
   {
-    cellId: "Cell_Robot",
-    is_factory_sampling_row: false,
-    description: "Cell_Robot: num_ctx=16384, num_predict=2048, num_gpu=99, temperature=0, top_k=1, repeat_penalty=1.5.",
-  },
-  {
-    cellId: "Cell_Creative",
-    is_factory_sampling_row: false,
+    cellId: "Cell_Robot_Flow_V2",
     description:
-      "Cell_Creative: num_ctx=16384, num_predict=2048, num_gpu=99, temperature=1.5, top_p=0.95, mirostat=2.",
+      "Cell_Robot_Flow_V2: num_ctx=16384, num_predict=2048, num_gpu=99, temperature=0.1, top_k=40, repeat_penalty=1.15 (prior Flow T with stricter repeat for JSON).",
   },
   {
-    cellId: "Cell_Thin_Context",
-    is_factory_sampling_row: false,
-    description: "Cell_Thin_Context: only num_ctx=8192, num_predict=2048, num_gpu=99; sampling omitted.",
+    cellId: "Cell_Robot_Stiff",
+    description:
+      "Cell_Robot_Stiff: num_ctx=16384, num_predict=2048, num_gpu=99, temperature=0, top_k=1, repeat_penalty=1.1 (T=0 anchor / baseline).",
   },
 ];
 
 function ollamaOptionsForCellId(cellId: MatrixCellId): Record<string, unknown> {
+  const base = {
+    num_ctx: PROTOCOL_NUM_CTX,
+    num_predict: PROTOCOL_NUM_PREDICT,
+    num_gpu: PROTOCOL_NUM_GPU,
+  };
   switch (cellId) {
-    case "Cell_Factory":
-      return {
-        num_ctx: PROTOCOL_NUM_CTX_FULL,
-        num_predict: PROTOCOL_NUM_PREDICT,
-        num_gpu: PROTOCOL_NUM_GPU,
-      };
-    case "Cell_Robot":
-      return {
-        num_ctx: PROTOCOL_NUM_CTX_FULL,
-        num_predict: PROTOCOL_NUM_PREDICT,
-        num_gpu: PROTOCOL_NUM_GPU,
-        temperature: 0,
-        top_k: 1,
-        repeat_penalty: 1.5,
-      };
-    case "Cell_Creative":
-      return {
-        num_ctx: PROTOCOL_NUM_CTX_FULL,
-        num_predict: PROTOCOL_NUM_PREDICT,
-        num_gpu: PROTOCOL_NUM_GPU,
-        temperature: 1.5,
-        top_p: 0.95,
-        mirostat: 2,
-      };
-    case "Cell_Thin_Context":
-      return {
-        num_ctx: PROTOCOL_NUM_CTX_THIN,
-        num_predict: PROTOCOL_NUM_PREDICT,
-        num_gpu: PROTOCOL_NUM_GPU,
-      };
+    case "Cell_Robot_Vibrant":
+      return { ...base, temperature: 0.08, top_k: 20, repeat_penalty: 1.15 };
+    case "Cell_Robot_Flow_V2":
+      return { ...base, temperature: 0.1, top_k: 40, repeat_penalty: 1.15 };
+    case "Cell_Robot_Stiff":
+      return { ...base, temperature: 0, top_k: 1, repeat_penalty: 1.1 };
     default: {
       const _x: never = cellId;
       throw new Error(`unknown cell ${_x}`);
@@ -294,11 +262,8 @@ function ollamaOptionsForCellId(cellId: MatrixCellId): Record<string, unknown> {
   }
 }
 
-/** Baseline runs use Cell_Robot options (deterministic strict sampling). */
-const BASELINE_OLLAMA_OPTIONS = ollamaOptionsForCellId("Cell_Robot");
-
-/** Factory \`valueScoreDepthAdjusted\` below this fraction of best tuned cell → “significantly worse” in notes. */
-const FACTORY_VS_TUNED_WORSE_RATIO = 0.55;
+/** Baseline runs use Cell_Robot_Stiff (T=0, top_k=1, repeat_penalty=1.1) as the strict JSON anchor. */
+const BASELINE_OLLAMA_OPTIONS = ollamaOptionsForCellId("Cell_Robot_Stiff");
 
 const BASELINE_RUNS = Number(process.env.BENCHMARK_BASELINE_RUNS ?? 5);
 const MATRIX_RUNS_DEFAULT = Number(process.env.BENCHMARK_MATRIX_RUNS ?? 2);
@@ -312,10 +277,11 @@ const EXPERIMENTAL_MODEL_TAGS = new Set<string>();
 /** Only these skip remaining temperature configs when a cell is slower than HEAVY_LATENCY_SKIP_MS. */
 const HEAVY_REFERENCE_SKIP_TAGS = new Set<string>();
 
-/** Extra scoring discipline for this benchmark (does not change production prompts). */
+/** Extra scoring discipline for this benchmark (aligns with user prompt; production uses semanticFitScoreReviewPrompt only). */
 const BENCHMARK_SYSTEM_APPEND_SEMANTIC_RULES = `BENCHMARK_SEMANTIC_RULES (this run only):
 - Use ONLY facts stated in the job posting text and the CV / evidence blocks supplied in the user message. Do not invent requirements, tools, industries, or skills that are not explicitly or clearly implied there.
-- Penalize missing skills or experience ONLY when those items are stated as required or essential in the job expectations you were given. Do NOT subtract points for skills the posting does not ask for (including skills you might expect for the role title but that never appear in the supplied text).`;
+- Penalize missing skills or experience ONLY when those items are stated as required or essential in the job expectations you were given. Do NOT subtract points for skills the posting does not ask for (including skills you might expect for the role title but that never appear in the supplied text).
+- Follow LOGISTICS_AND_PHYSICAL_REQUIREMENTS (common-sense deduction) in the user message: implied mobility/logistics from prior roles satisfy the substance without verbatim keywords.`;
 
 const BENCH_TIMEOUT_MS = Number(process.env.BENCHMARK_TIMEOUT_MS ?? 180_000);
 const SLOWDOWN_MAX = 1.15;
@@ -377,15 +343,14 @@ function isHeavyDepthPenaltyModel(model: string): boolean {
   return /14b|13b|16b|15b|12b/.test(model.toLowerCase());
 }
 
-function reportedTemperatureForCell(cellId: MatrixCellId): number | null {
-  if (cellId === "Cell_Robot") return 0;
-  if (cellId === "Cell_Creative") return 1.5;
-  return null;
+function reportedTemperatureForCell(cellId: MatrixCellId): number {
+  if (cellId === "Cell_Robot_Stiff") return 0;
+  if (cellId === "Cell_Robot_Flow_V2") return 0.1;
+  return 0.08;
 }
 
-/** failed_responses.log: only Cell_Robot / Cell_Creative parse errors, or HTTP errors on those same cells. */
-function shouldAppendMatrixFailureToLog(cellId: MatrixCellId, httpOk: boolean, parseOk: boolean): boolean {
-  if (cellId !== "Cell_Robot" && cellId !== "Cell_Creative") return false;
+/** Append full raw to failed_responses.log for any matrix cell on HTTP failure or strict parse failure. */
+function shouldAppendMatrixFailureToLog(_cellId: MatrixCellId, httpOk: boolean, parseOk: boolean): boolean {
   if (!httpOk) return true;
   if (parseOk) return false;
   return true;
@@ -395,12 +360,10 @@ type CellResult = {
   model: string;
   matrix_cell_id: MatrixCellId;
   matrix_cell_description: string;
-  /** True only for Cell_Factory (Ollama default sampling — no temperature in options). */
-  is_factory_default: boolean;
   ollama_options_used: Record<string, unknown>;
   num_ctx: number;
   num_predict: number;
-  temperature: number | null;
+  temperature: number;
   ollamaFormatKind: "json";
   wallMsRuns: number[];
   parseOkRuns: boolean[];
@@ -423,125 +386,6 @@ type CellResult = {
   vramTierUsed: number;
 };
 
-function buildFactoryVsTunedNotes(matrix: CellResult[]): {
-  lines: string[];
-  perModel: Array<{
-    model: string;
-    bestTunedValueDepthAdj: number | null;
-    factoryValueDepthAdj: number | null;
-    factoryValidStrict: boolean;
-    tunedHadAnyStrictValid: boolean;
-    verdict:
-      | "factory_significantly_worse"
-      | "factory_comparable"
-      | "factory_better_than_tuned_surprise"
-      | "factory_fails_tuned_ok"
-      | "no_factory_row"
-      | "no_tuned_strict_baseline";
-  }>;
-} {
-  if (!matrix.some((c) => c.is_factory_default)) {
-    return {
-      lines: ["This benchmark matrix has no factory-default (omitted temperature) row — factoryVsTuned N/A."],
-      perModel: [],
-    };
-  }
-  const models = [...new Set(matrix.map((c) => c.model))];
-  const lines: string[] = [];
-  const perModel: Array<{
-    model: string;
-    bestTunedValueDepthAdj: number | null;
-    factoryValueDepthAdj: number | null;
-    factoryValidStrict: boolean;
-    tunedHadAnyStrictValid: boolean;
-    verdict:
-      | "factory_significantly_worse"
-      | "factory_comparable"
-      | "factory_better_than_tuned_surprise"
-      | "factory_fails_tuned_ok"
-      | "no_factory_row"
-      | "no_tuned_strict_baseline";
-  }> = [];
-
-  for (const model of models) {
-    const tuned = matrix.filter((c) => c.model === model && !c.is_factory_default);
-    const factory = matrix.find((c) => c.model === model && c.is_factory_default);
-    if (!factory) {
-      perModel.push({
-        model,
-        bestTunedValueDepthAdj: null,
-        factoryValueDepthAdj: null,
-        factoryValidStrict: false,
-        tunedHadAnyStrictValid: tuned.some((t) => t.validStrict),
-        verdict: "no_factory_row",
-      });
-      continue;
-    }
-    const tunedStrict = tuned.filter((t) => t.validStrict && t.valueScoreDepthAdjusted !== null && Number.isFinite(t.valueScoreDepthAdjusted));
-    const bestTunedValueDepthAdj =
-      tunedStrict.length > 0 ? Math.max(...tunedStrict.map((t) => t.valueScoreDepthAdjusted!)) : null;
-    const tunedHadAnyStrictValid = tuned.some((t) => t.validStrict);
-    const fAdj = factory.valueScoreDepthAdjusted;
-    const factoryValidStrict = factory.validStrict;
-
-    let verdict:
-      | "factory_significantly_worse"
-      | "factory_comparable"
-      | "factory_better_than_tuned_surprise"
-      | "factory_fails_tuned_ok"
-      | "no_factory_row"
-      | "no_tuned_strict_baseline" = "factory_comparable";
-
-    if (!tunedHadAnyStrictValid && !factoryValidStrict) {
-      verdict = "no_tuned_strict_baseline";
-    } else if (!factoryValidStrict && tunedHadAnyStrictValid) {
-      verdict = "factory_fails_tuned_ok";
-      lines.push(
-        `${model}: factory default (temp omitted) failed strict parse while at least one tuned temp cell passed — red flag for loose sampling under noisy prompt.`,
-      );
-    } else if (
-      factoryValidStrict &&
-      bestTunedValueDepthAdj !== null &&
-      fAdj !== null &&
-      fAdj < bestTunedValueDepthAdj * FACTORY_VS_TUNED_WORSE_RATIO
-    ) {
-      verdict = "factory_significantly_worse";
-      lines.push(
-        `${model}: factory valueScoreDepthAdjusted (${fAdj.toFixed(4)}) << best tuned (${bestTunedValueDepthAdj.toFixed(4)} × ${FACTORY_VS_TUNED_WORSE_RATIO}) — strict low-temp tuning justified on value.`,
-      );
-    } else if (
-      factoryValidStrict &&
-      bestTunedValueDepthAdj !== null &&
-      fAdj !== null &&
-      fAdj > bestTunedValueDepthAdj * 1.08
-    ) {
-      verdict = "factory_better_than_tuned_surprise";
-      lines.push(
-        `${model}: factory default beat best tuned valueScoreDepthAdjusted (${fAdj.toFixed(4)} vs ${bestTunedValueDepthAdj.toFixed(4)}) — unexpected; inspect matrix row and raw logs.`,
-      );
-    } else {
-      verdict = "factory_comparable";
-    }
-
-    perModel.push({
-      model,
-      bestTunedValueDepthAdj,
-      factoryValueDepthAdj: fAdj,
-      factoryValidStrict,
-      tunedHadAnyStrictValid,
-      verdict,
-    });
-  }
-
-  if (lines.length === 0) {
-    lines.push(
-      "No strong factory-vs-tuned divergence detected (see perModel[].verdict). Factory row uses omitted options.temperature (Ollama runner default).",
-    );
-  }
-
-  return { lines, perModel };
-}
-
 function estimateInputTokensRough(userPromptChars: number, correctionsChars: number): number {
   return (userPromptChars + correctionsChars + SYSTEM_APPENDIX_CHARS_EST) * CHARS_TO_INPUT_TOKENS;
 }
@@ -562,7 +406,6 @@ async function appendFailedRawLog(entry: {
   num_ctx: number;
   num_predict: number;
   temperature: number | null;
-  is_factory_default?: boolean;
   matrix_cell_id?: MatrixCellId;
   reason: string;
   raw: string;
@@ -571,13 +414,9 @@ async function appendFailedRawLog(entry: {
     entry.raw.length > RAW_LOG_MAX_CHARS
       ? `${entry.raw.slice(0, RAW_LOG_MAX_CHARS)}\n...[truncated ${entry.raw.length - RAW_LOG_MAX_CHARS} chars]`
       : entry.raw;
-  const tempLabel =
-    entry.is_factory_default || entry.temperature === null
-      ? "ollama_runner_default(options.temperature_omitted)"
-      : String(entry.temperature);
-  const factoryTag = entry.is_factory_default ? "is_factory_default=yes" : "is_factory_default=no";
+  const tempLabel = entry.temperature === null ? "n/a" : String(entry.temperature);
   const cellTag = entry.matrix_cell_id ? `matrix_cell=${entry.matrix_cell_id} ` : "";
-  const block = `\n${"=".repeat(80)}\n${entry.iso} | ${cellTag}model=${entry.model} ctx=${entry.num_ctx} pred=${entry.num_predict} temp=${tempLabel} ${factoryTag}\nREASON: ${entry.reason}\nRAW:\n${raw}\n`;
+  const block = `\n${"=".repeat(80)}\n${entry.iso} | ${cellTag}model=${entry.model} ctx=${entry.num_ctx} pred=${entry.num_predict} temp=${tempLabel}\nREASON: ${entry.reason}\nRAW:\n${raw}\n`;
   await mkdir(path.dirname(FAILED_RAW_LOG), { recursive: true });
   await appendFile(FAILED_RAW_LOG, block, "utf8");
 }
@@ -781,12 +620,12 @@ async function main(): Promise<void> {
   const productionJsonFormat = "json" as const;
   const baselineNumCtx = Number(BASELINE_OLLAMA_OPTIONS.num_ctx ?? BENCH_NUM_CTX);
   const baselineNumPredict = Number(BASELINE_OLLAMA_OPTIONS.num_predict ?? BENCH_NUM_PREDICT);
-  const baselineTempReported = reportedTemperatureForCell("Cell_Robot");
+  const baselineTempReported = reportedTemperatureForCell("Cell_Robot_Stiff");
 
   console.log(
     `Stress prompt chars=${promptCharCount} (semantic fit + USER_CORRECTIONS + evidence appendix). Warm-up (discarded):`,
     matrixModel,
-    `(baseline = Cell_Robot options, num_ctx=${baselineNumCtx})`,
+    `(baseline = Cell_Robot_Stiff options, num_ctx=${baselineNumCtx})`,
   );
   const baselineDiscardedWarm = await ollamaGenerateBench({
     model: matrixModel,
@@ -800,7 +639,7 @@ async function main(): Promise<void> {
     if (baselineDiscardedWarm.httpOk && !wpr.ok) {
       const rw = baselineDiscardedWarm.raw;
       console.warn(
-        `[benchmark] baseline_discarded_warmup | parse=false | ${wpr.message} (Cell_Robot options; not written to ${path.basename(FAILED_RAW_LOG)} per protocol).`,
+        `[benchmark] baseline_discarded_warmup | parse=false | ${wpr.message} (Cell_Robot_Stiff options; not written to ${path.basename(FAILED_RAW_LOG)} per protocol).`,
       );
       if (rw.length > 0) {
         console.warn(`raw_head (${Math.min(800, rw.length)} chars):\n${rw.slice(0, 800)}${rw.length > 800 ? "…" : ""}`);
@@ -819,7 +658,7 @@ async function main(): Promise<void> {
   const baselineFitScores: (number | null)[] = [];
   let baselineReasoningSample = "";
   console.log(
-    `Baseline ${matrixModel} (${BASELINE_RUNS} runs, Cell_Robot options; num_ctx=${baselineNumCtx} num_predict=${baselineNumPredict})...`,
+    `Baseline ${matrixModel} (${BASELINE_RUNS} runs, Cell_Robot_Stiff options; num_ctx=${baselineNumCtx} num_predict=${baselineNumPredict})...`,
   );
   for (let i = 0; i < BASELINE_RUNS; i++) {
     const r = await ollamaGenerateBench({
@@ -860,11 +699,11 @@ async function main(): Promise<void> {
   const matrixResults: CellResult[] = [];
   const baselineReasoningDepthMetrics = reasoningDepthMetrics(baselineReasoningSample);
 
-  console.log(`\nMatrix warm-up (discarded, Cell_Factory / default sampling): ${matrixModel}`);
-  const factoryWarmOpts = { ...ollamaOptionsForCellId("Cell_Factory") };
+  console.log(`\nMatrix warm-up (discarded, Cell_Robot_Stiff): ${matrixModel}`);
+  const matrixWarmOpts = { ...ollamaOptionsForCellId("Cell_Robot_Stiff") };
   const matrixDiscardedWarm = await ollamaGenerateBench({
     model: matrixModel,
-    ollamaOptions: factoryWarmOpts,
+    ollamaOptions: matrixWarmOpts,
     ollamaFormat: productionJsonFormat,
     userPrompt,
     systemAppend: correctionsBlock,
@@ -874,14 +713,14 @@ async function main(): Promise<void> {
     if (matrixDiscardedWarm.httpOk && !mwpr.ok) {
       const rw = matrixDiscardedWarm.raw;
       console.warn(
-        `[benchmark] matrix_discarded_warmup Cell_Factory | parse=false | ${mwpr.message} (not written to ${path.basename(FAILED_RAW_LOG)} per protocol).`,
+        `[benchmark] matrix_discarded_warmup Cell_Robot_Stiff | parse=false | ${mwpr.message} (not written to ${path.basename(FAILED_RAW_LOG)} per protocol).`,
       );
       if (rw.length > 0) {
         console.warn(`raw_head (${Math.min(800, rw.length)} chars):\n${rw.slice(0, 800)}${rw.length > 800 ? "…" : ""}`);
       }
     } else if (!matrixDiscardedWarm.httpOk) {
       console.warn(
-        `[benchmark] matrix_discarded_warmup Cell_Factory | http_failed | ${matrixDiscardedWarm.err ?? "?"} (not written to ${path.basename(FAILED_RAW_LOG)} per protocol).`,
+        `[benchmark] matrix_discarded_warmup Cell_Robot_Stiff | http_failed | ${matrixDiscardedWarm.err ?? "?"} (not written to ${path.basename(FAILED_RAW_LOG)} per protocol).`,
       );
     }
   }
@@ -930,19 +769,10 @@ async function main(): Promise<void> {
             num_ctx: cellNumCtx,
             num_predict: PROTOCOL_NUM_PREDICT,
             temperature: tempReported,
-            is_factory_default: cellDef.is_factory_sampling_row,
             matrix_cell_id: cellDef.cellId,
             reason: `${cellDef.cellId} | ${baseReason}`,
             raw: out.raw ?? "",
           });
-        } else {
-          console.warn(
-            `[benchmark] ${cellDef.cellId} | ${baseReason} (not written to ${path.basename(FAILED_RAW_LOG)} — only Cell_Robot / Cell_Creative go to file).`,
-          );
-          const rw = out.raw ?? "";
-          if (rw.length > 0) {
-            console.warn(`raw_head (${Math.min(800, rw.length)} chars):\n${rw.slice(0, 800)}${rw.length > 800 ? "…" : ""}`);
-          }
         }
       }
       if (!ok && sampleErrors.length < 2) {
@@ -956,8 +786,10 @@ async function main(): Promise<void> {
             ? " LOW_ACC"
             : ""
           : "";
+      const rp = ollamaOpts.repeat_penalty;
+      const rpHint = typeof rp === "number" ? ` repeat_penalty=${rp}` : "";
       console.log(
-        `  ${cellDef.cellId} ctx=${cellNumCtx} pred=${PROTOCOL_NUM_PREDICT} run ${r + 1}/${runs}: ${Math.round(out.wallMs)}ms parse=${ok}${fitHint}${lowHint}${errHint}`,
+        `  ${cellDef.cellId} ctx=${cellNumCtx} pred=${PROTOCOL_NUM_PREDICT} temp=${tempReported}${rpHint} run ${r + 1}/${runs}: ${Math.round(out.wallMs)}ms parse=${ok}${fitHint}${lowHint}${errHint}`,
       );
     }
 
@@ -1010,7 +842,6 @@ async function main(): Promise<void> {
       model: matrixModel,
       matrix_cell_id: cellDef.cellId,
       matrix_cell_description: cellDef.description,
-      is_factory_default: cellDef.is_factory_sampling_row,
       ollama_options_used: { ...ollamaOpts },
       num_ctx: cellNumCtx,
       num_predict: PROTOCOL_NUM_PREDICT,
@@ -1051,50 +882,36 @@ async function main(): Promise<void> {
   const baselineForCompare = Number.isFinite(baselineMedian) ? baselineMedian : baselineMedianAllRuns;
   const ceiling = baselineForCompare * SLOWDOWN_MAX;
 
-  const factoryVsTuned = buildFactoryVsTunedNotes(matrixResults);
-
-  const candidates = matrixResults.filter(
-    (c) => !c.is_factory_default && c.validStrict && Number.isFinite(c.medianMs) && c.medianMs <= ceiling,
-  );
+  const candidates = matrixResults.filter((c) => c.validStrict && Number.isFinite(c.medianMs) && c.medianMs <= ceiling);
   const sorted = [...candidates].sort((a, b) => a.medianMs - b.medianMs);
   const champion = sorted[0] ?? null;
 
   const valueCandidates = matrixResults.filter(
-    (c) =>
-      !c.is_factory_default &&
-      c.validStrict &&
-      c.valueScoreDepthAdjusted !== null &&
-      Number.isFinite(c.valueScoreDepthAdjusted),
+    (c) => c.validStrict && c.valueScoreDepthAdjusted !== null && Number.isFinite(c.valueScoreDepthAdjusted),
   );
   const championByValue =
     [...valueCandidates].sort((a, b) => (b.valueScoreDepthAdjusted ?? 0) - (a.valueScoreDepthAdjusted ?? 0))[0] ?? null;
 
   const payload = {
     generatedAt: new Date().toISOString(),
-    benchmarkMode: "gemma4_e4b_absolute_limits",
+    benchmarkMode: "gemma4_e4b_heat_expansion",
     stressPromptCharCount: promptCharCount,
     jobDescription: FULL_JOB_DESCRIPTION,
     cvPath: path.join(REPO_ROOT, CV_REL_PATH),
     vramCleanup: "keep_alive:0 on each /api/generate (single-model gemma4:e4b run; no ollama stop between cells).",
-    factoryRunColumn:
-      "In matrix[], is_factory_default is true only for Cell_Factory (sampling params omitted from the Ollama options object — runner defaults). Other cells set explicit sampling as documented in benchParams.matrixCells.",
     skippedModels,
     benchParams: {
       matrixModels: [...MATRIX_MODELS],
       protocol: {
-        num_ctx_full: PROTOCOL_NUM_CTX_FULL,
-        num_ctx_thin: PROTOCOL_NUM_CTX_THIN,
+        num_ctx: PROTOCOL_NUM_CTX,
         num_predict: PROTOCOL_NUM_PREDICT,
         num_gpu: PROTOCOL_NUM_GPU,
       },
-      full_context_num_ctx: PROTOCOL_NUM_CTX_FULL,
-      thin_context_num_ctx: PROTOCOL_NUM_CTX_THIN,
+      num_ctx: PROTOCOL_NUM_CTX,
       num_predict: PROTOCOL_NUM_PREDICT,
       num_gpu: PROTOCOL_NUM_GPU,
       matrixCells: MATRIX_CELLS.map((c) => ({
         cell_id: c.cellId,
-        is_factory_default: c.is_factory_sampling_row,
-        is_factory_sampling_row: c.is_factory_sampling_row,
         description: c.description,
         ollama_options: ollamaOptionsForCellId(c.cellId),
       })),
@@ -1110,7 +927,7 @@ async function main(): Promise<void> {
     },
     baseline: {
       model: matrixModel,
-      baseline_cell: "Cell_Robot",
+      baseline_cell: "Cell_Robot_Stiff",
       ollama_options: { ...BASELINE_OLLAMA_OPTIONS },
       num_ctx: baselineNumCtx,
       num_predict: baselineNumPredict,
@@ -1121,7 +938,7 @@ async function main(): Promise<void> {
       latenciesMs: baselineLatencies,
       parseOkPerRun: baselineParseOk,
       fitScorePerRun: baselineFitScores,
-      /** Median reconciled \`fit_score\` from baseline (Cell_Robot options; reference for delta / lowAccuracy / valueScore). */
+      /** Median reconciled \`fit_score\` from baseline (Cell_Robot_Stiff options; reference for delta / lowAccuracy / valueScore). */
       baselineFitScoreMedianR1: Number.isFinite(baselineR1MedianFit) ? baselineR1MedianFit : null,
       baselineReasoningDepthMetrics,
       medianMs: baselineForCompare,
@@ -1131,21 +948,18 @@ async function main(): Promise<void> {
     champion,
     championByValue,
     selectionNotes: {
-      championUsesTunedCellsOnly:
-        "champion and championByValue exclude matrix rows with is_factory_default=true (Cell_Factory only). Baseline uses Cell_Robot options.",
-      factorySanityRow:
-        "Cell_Factory / Cell_Thin_Context: options contain only num_ctx, num_predict, num_gpu (16384/2048/99 and 8192/2048/99). failed_responses.log receives only Cell_Robot + Cell_Creative parse errors and HTTP failures on those cells; other errors are console.warn only.",
-      factoryVsTuned: factoryVsTuned,
+      matrixDesign:
+        "Heat expansion (tuning_results_4: T≤0.05 matched T=0): Cell_Robot_Vibrant (T=0.08, top_k=20, repeat_penalty=1.15), Cell_Robot_Flow_V2 (T=0.1, top_k=40, repeat_penalty=1.15), Cell_Robot_Stiff (T=0, top_k=1, repeat_penalty=1.1, baseline anchor). All num_ctx=16384. Hunt the threshold where narrative becomes more vibrant vs T=0 without breaking strict JSON — watch fit_score drift, reasoningDensityRatioVsR1, and parseOkRuns vs Stiff.",
       ruleLatency:
-        "Among non-factory matrix cells, 100% strict JSON + semantic-fit shape on all runs, median wall ms <= baseline median * 1.15; pick lowest median.",
+        "Among matrix cells, 100% strict JSON + semantic-fit shape on all runs, median wall ms <= baseline median * 1.15; pick lowest median.",
       ruleValueScore:
-        "valueScore = max(1, 100 - abs(relevance_score_median - baselineFitScoreMedianR1)) / ((medianMs/1000) * vramTierUsed); vramTier is a name heuristic unless BENCHMARK_VRAM_TIER_OVERRIDE is set. championByValue uses valueScoreDepthAdjusted (see reasoningDensity), non-factory cells only.",
+        "valueScore = max(1, 100 - abs(relevance_score_median - baselineFitScoreMedianR1)) / ((medianMs/1000) * vramTierUsed); vramTier is a name heuristic unless BENCHMARK_VRAM_TIER_OVERRIDE is set. championByValue uses valueScoreDepthAdjusted (see reasoningDensity).",
       reasoningDensity:
         "Cell narrative (reasoning_summary_sample) is scored as composite = charLen + 45 * keywordHits. reasoningDensityRatioVsR1 = cellComposite / baselineReasoningDepthMetrics.composite (last good baseline run). For 14B-class tags only: shallow reasoning penalty may apply per env thresholds.",
       lowAccuracyRule: `lowAccuracyVsR1 when |relevance_score_median - baselineFitScoreMedianR1| > ${LOW_ACCURACY_FIT_DELTA} (JSON can still be valid).`,
       failedRawLog: FAILED_RAW_LOG,
       failedRawLogReasonPrefixes:
-        "File receives full raw body only for: (1) JSON parse errors on Cell_Robot or Cell_Creative, (2) HTTP failures on Cell_Robot or Cell_Creative. Cell_Factory, Cell_Thin_Context, and baseline warm/runs emit console.warn with raw_head only. REASON lines include matrix_cell=… when applicable.",
+        "Any matrix cell: HTTP failure or strict JSON/semantic parse failure → full raw appended with matrix_cell=…. Baseline warm/runs still use console.warn + raw_head only (not written to file).",
       fallback: champion
         ? null
         : "No cell met validity+latency constraint; inspect matrix[].sampleErrors and benchmarks/failed_responses.log; raise num_predict/ctx if models truncate.",
@@ -1156,17 +970,19 @@ async function main(): Promise<void> {
   await writeFile(OUTPUT_PATH, JSON.stringify(payload, null, 2), "utf8");
   console.log(`\nWrote ${OUTPUT_PATH}`);
   if (champion) {
-    const tlab = champion.temperature === null ? "sampling_omitted" : String(champion.temperature);
+    const rp = champion.ollama_options_used.repeat_penalty;
+    const rpStr = typeof rp === "number" ? String(rp) : "?";
     console.log(
-      `Champion (latency): ${champion.model} ${champion.matrix_cell_id} ctx=${champion.num_ctx} pred=${champion.num_predict} temp=${tlab} medianMs=${Math.round(champion.medianMs)} valueAdj=${champion.valueScoreDepthAdjusted?.toFixed(4) ?? "n/a"} lowAcc=${champion.lowAccuracyVsR1}`,
+      `Champion (latency): ${champion.model} ${champion.matrix_cell_id} ctx=${champion.num_ctx} pred=${champion.num_predict} temp=${champion.temperature} repeat_penalty=${rpStr} medianMs=${Math.round(champion.medianMs)} valueAdj=${champion.valueScoreDepthAdjusted?.toFixed(4) ?? "n/a"} lowAcc=${champion.lowAccuracyVsR1}`,
     );
   } else {
     console.log("No latency champion selected; see tuning_results.json matrix.");
   }
   if (championByValue) {
-    const tlab = championByValue.temperature === null ? "sampling_omitted" : String(championByValue.temperature);
+    const rp = championByValue.ollama_options_used.repeat_penalty;
+    const rpStr = typeof rp === "number" ? String(rp) : "?";
     console.log(
-      `Champion (value, depth-adjusted): ${championByValue.model} ${championByValue.matrix_cell_id} valueAdj=${championByValue.valueScoreDepthAdjusted?.toFixed(4) ?? "n/a"} raw=${championByValue.valueScore?.toFixed(4) ?? "n/a"} ratioR1=${championByValue.reasoningDensityRatioVsR1?.toFixed(2) ?? "n/a"} medianMs=${Math.round(championByValue.medianMs)} temp=${tlab} fitMed=${championByValue.relevance_score_median} lowAcc=${championByValue.lowAccuracyVsR1}`,
+      `Champion (value, depth-adjusted): ${championByValue.model} ${championByValue.matrix_cell_id} valueAdj=${championByValue.valueScoreDepthAdjusted?.toFixed(4) ?? "n/a"} raw=${championByValue.valueScore?.toFixed(4) ?? "n/a"} ratioR1=${championByValue.reasoningDensityRatioVsR1?.toFixed(2) ?? "n/a"} medianMs=${Math.round(championByValue.medianMs)} temp=${championByValue.temperature} repeat_penalty=${rpStr} fitMed=${championByValue.relevance_score_median} lowAcc=${championByValue.lowAccuracyVsR1}`,
     );
   }
   console.log(`Failed-parse raw dumps (if any): ${FAILED_RAW_LOG}`);

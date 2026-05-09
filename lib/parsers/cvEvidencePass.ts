@@ -41,7 +41,7 @@ ${cvSlice}`;
   type Payload = { evidence_rationale?: string; confirmed_skills?: unknown };
   const data = await generateJsonWithOllamaStrict<Payload>(prompt, {
     model: params.model,
-    role: "analysis",
+    role: "extract_cv",
   });
 
   const raw = data.confirmed_skills;

@@ -10,7 +10,8 @@ import {
 const DOMAINS: ConstraintTacticDomain[] = ["location", "remote_zone", "compensation"];
 
 function normalizeStance(v: unknown): VetoStance {
-  if (v === "never_veto" || v === "soft_only" || v === "default") return v;
+  if (v === "never_veto" || v === "soft_only") return "strong_preference";
+  if (v === "strong_preference" || v === "default") return v;
   return "default";
 }
 

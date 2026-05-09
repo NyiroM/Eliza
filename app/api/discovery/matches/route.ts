@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { countDiscoveredJobLines } from "../../../../lib/discovery/jobStore";
 import { countNewMatchLines, loadNewMatchesTail, removeNewMatchesByJobId } from "../../../../lib/discovery/matchesStore";
 import { countNonMatchLines, loadNonMatchesTail, removeNonMatchesByJobId } from "../../../../lib/discovery/nonMatchesStore";
+import { addSuppressedJobId } from "../../../../lib/discovery/suppressedStore";
 
 export const dynamic = "force-dynamic";
 
@@ -49,9 +50,11 @@ export async function DELETE(request: NextRequest) {
   const list = request.nextUrl.searchParams.get("list");
   if (list === "rejects") {
     const { removed } = await removeNonMatchesByJobId(jobId);
+    await addSuppressedJobId(jobId);
     return NextResponse.json({ ok: true, removed }, { headers: NO_STORE });
   }
 
   const { removed } = await removeNewMatchesByJobId(jobId);
+  await addSuppressedJobId(jobId);
   return NextResponse.json({ ok: true, removed }, { headers: NO_STORE });
 }

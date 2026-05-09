@@ -1,6 +1,6 @@
 import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
-import { CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
+import { CREATIVE_EXTERNAL_HUMAN_PROSE_INSTRUCTION, CREATIVE_STRUCTURAL_NOISE_INSTRUCTION } from "../prompts/creative";
 
 export type CvRewriteInput = {
   original_bullets: string[];
@@ -81,6 +81,7 @@ Return STRICT JSON only:
 
 Rules:
 - ${CREATIVE_STRUCTURAL_NOISE_INSTRUCTION}
+- ${CREATIVE_EXTERNAL_HUMAN_PROSE_INSTRUCTION}
 - Keep every statement honest and realistic
 - Keep professional tone and plain language
 - Keep output easy to edit by user

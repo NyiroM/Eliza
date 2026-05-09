@@ -65,3 +65,23 @@ export async function loadDiscoveredJobsTail(maxLines = 400): Promise<Discovered
     return [];
   }
 }
+
+/** Parse up to `maxLines` jobs from jobs.jsonl (oldest → newest). */
+export async function loadDiscoveredJobsAll(maxLines = 5000): Promise<DiscoveredJob[]> {
+  try {
+    const raw = await readFile(DISCOVERY_JOBS_PATH, "utf-8");
+    const lines = raw.split("\n").filter((l) => l.trim());
+    const slice = maxLines > 0 ? lines.slice(-maxLines) : [];
+    const out: DiscoveredJob[] = [];
+    for (const line of slice) {
+      try {
+        out.push(JSON.parse(line) as DiscoveredJob);
+      } catch {
+        /* skip bad line */
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}

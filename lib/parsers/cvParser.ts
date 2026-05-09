@@ -1,5 +1,5 @@
 import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
-import { generateJsonWithOllama, type ParserSource } from "../llm/ollama";
+import { generateJsonWithOllama } from "../llm/ollama";
 import PDFParser from "pdf2json";
 import type { CvParseResult } from "../../types/cv";
 

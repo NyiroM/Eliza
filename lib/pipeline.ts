@@ -57,7 +57,6 @@ function interviewPrepFromUnknown(raw: unknown, max: number): InterviewPrepRow[]
 }
 import type {
   JobSourceKind,
-  PipelineContext,
   PipelineDetailedResult,
   PipelineInput,
   PipelineOutput,

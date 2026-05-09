@@ -42,7 +42,7 @@ export function shouldSuppressHardVetoForTactics(
   const domain = classifyVetoReasonTactic(vetoReason);
   if (!domain) return false;
   const st = stanceFor(tactics, domain);
-  return st === "never_veto" || st === "soft_only";
+  return st === "strong_preference";
 }
 
 export function buildConstraintTacticHints(tactics: StoredConstraintTactics): string[] {
@@ -50,13 +50,9 @@ export function buildConstraintTacticHints(tactics: StoredConstraintTactics): st
   const domains: ConstraintTacticDomain[] = ["location", "remote_zone", "compensation"];
   for (const d of domains) {
     const st = stanceFor(tactics, d);
-    if (st === "never_veto") {
+    if (st === "strong_preference") {
       out.push(
-        `User policy: never set vetoed=true for clashes that are only about ${d.replaceAll("_", " ")}; use constraint_delta instead.`,
-      );
-    } else if (st === "soft_only") {
-      out.push(
-        `User policy: ${d.replaceAll("_", " ")} constraints are soft only — do not veto; reflect in constraint_delta.`,
+        `User policy: ${d.replaceAll("_", " ")} is a strong preference — never set vetoed=true for clashes that are only about this domain; apply a large negative constraint_delta instead.`,
       );
     }
   }
@@ -69,7 +65,7 @@ export function inferFallbackConstraintVetoWithTactics(
   jobTextEnglish: string,
   tactics: StoredConstraintTactics,
 ): { vetoed: boolean; veto_reason: string | null } {
-  if (stanceFor(tactics, "location") === "never_veto" || stanceFor(tactics, "location") === "soft_only") {
+  if (stanceFor(tactics, "location") === "strong_preference") {
     return { vetoed: false, veto_reason: null };
   }
   const joined = constraints.join(" ").toLowerCase();

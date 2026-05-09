@@ -4,6 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DiscoveryHubPanel from "@/app/components/DiscoveryHubPanel";
 import JobInputHighlighter from "@/app/components/JobInputHighlighter";
 import { DEFAULT_OLLAMA_MODEL } from "@/config/constants";
+import {
+  BTN_GHOST,
+  BTN_GHOST_BLUE_LG,
+  BTN_GHOST_SM,
+  BTN_PRIMARY_COMPACT,
+  BTN_PRIMARY_LG,
+} from "@/lib/ui/dashboardButtons";
 import type { SemanticHighlight } from "@/types/pipeline";
 
 type UploadStatus = {
@@ -185,7 +192,7 @@ export default function DashboardPage() {
   const [correctionDraft, setCorrectionDraft] = useState("");
   const [correctionBusy, setCorrectionBusy] = useState(false);
   const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
-  type VetoStanceOpt = "default" | "never_veto" | "soft_only";
+  type VetoStanceOpt = "default" | "strong_preference";
   const [skillSynonymPairs, setSkillSynonymPairs] = useState<Array<{ from: string; to: string }>>(
     [],
   );
@@ -454,7 +461,7 @@ export default function DashboardPage() {
       if (tacRes.ok) {
         const t = tacData.tactics ?? {};
         const norm = (v: string | undefined): VetoStanceOpt =>
-          v === "never_veto" || v === "soft_only" ? v : "default";
+          v === "strong_preference" ? v : "default";
         setTacticLocation(norm(t.location));
         setTacticRemoteZone(norm(t.remote_zone));
         setTacticCompensation(norm(t.compensation));
@@ -782,19 +789,15 @@ export default function DashboardPage() {
         <header className="space-y-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">ELIZA Dashboard</h1>
-            <p className="mt-1 max-w-2xl text-sm text-slate-400">
-              Upload your CV once, then paste a posting for semantic fit scoring, a transparent match
-              breakdown, and optional application assets.
-            </p>
           </div>
           <nav className="flex flex-wrap gap-2 border-b border-slate-800 pb-2" aria-label="Dashboard sections">
             <button
               type="button"
               onClick={() => setActiveTab("analysis")}
-              className={`rounded-md px-4 py-2 text-sm font-medium ${
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                 activeTab === "analysis"
-                  ? "bg-slate-100 text-slate-900"
-                  : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  ? "bg-slate-100 text-slate-900 shadow-sm"
+                  : "border border-transparent bg-transparent text-slate-400 hover:border-slate-700 hover:bg-slate-800/50 hover:text-slate-200"
               }`}
             >
               Analysis
@@ -802,10 +805,10 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => setActiveTab("discovery")}
-              className={`rounded-md px-4 py-2 text-sm font-medium ${
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                 activeTab === "discovery"
-                  ? "bg-slate-100 text-slate-900"
-                  : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  ? "bg-slate-100 text-slate-900 shadow-sm"
+                  : "border border-transparent bg-transparent text-slate-400 hover:border-slate-700 hover:bg-slate-800/50 hover:text-slate-200"
               }`}
             >
               Discovery Hub
@@ -822,23 +825,29 @@ export default function DashboardPage() {
         ) : null}
 
         {activeTab === "analysis" ? (
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:items-start">
-          <div className="space-y-6">
-            <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3">
+        <div className="grid grid-cols-1 gap-12 lg:grid-cols-2 lg:items-start">
+          <div className="space-y-6 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-5 shadow-sm shadow-black/20 ring-1 ring-white/[0.04] lg:p-6">
+            <section className="space-y-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
                 CV status
               </h2>
-          <div className="rounded-md border border-slate-700 p-3">
-            <p className="text-sm">
-              Status:{" "}
-              <span className={status.loaded ? "text-green-400" : "text-orange-300"}>
-                {status.loaded ? "Loaded" : "Not Loaded"}
+          <div className="rounded-lg border border-slate-800/90 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">CV</span>
+              <span
+                className={
+                  status.loaded
+                    ? "rounded-full bg-emerald-950/70 px-2.5 py-0.5 text-xs font-semibold text-emerald-100 ring-1 ring-emerald-600/35"
+                    : "rounded-full bg-amber-950/70 px-2.5 py-0.5 text-xs font-semibold text-amber-100 ring-1 ring-amber-600/40"
+                }
+              >
+                {status.loaded ? "Loaded" : "Not loaded"}
               </span>
-            </p>
+            </div>
             {status.loaded ? (
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-2 text-xs text-slate-400">
                 Skills parsed: {status.skills_count ?? 0}
-                {status.uploaded_at ? ` | Uploaded: ${status.uploaded_at}` : ""}
+                {status.uploaded_at ? ` · Uploaded: ${status.uploaded_at}` : ""}
               </p>
             ) : null}
           </div>
@@ -847,14 +856,9 @@ export default function DashboardPage() {
               type="file"
               accept="application/pdf"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-              className="block text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-slate-700 file:px-3 file:py-2 file:text-slate-100"
+              className="block text-sm text-slate-300 file:mr-3 file:rounded-md file:border file:border-slate-600 file:bg-slate-800/50 file:px-3 file:py-2 file:text-slate-100 file:hover:bg-slate-800"
             />
-            <button
-              type="button"
-              onClick={uploadCv}
-              disabled={loadingUpload}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm hover:bg-blue-500 disabled:bg-blue-900"
-            >
+            <button type="button" onClick={uploadCv} disabled={loadingUpload} className={BTN_GHOST}>
               {loadingUpload ? "Uploading..." : "Upload CV PDF"}
             </button>
             <button
@@ -862,7 +866,7 @@ export default function DashboardPage() {
               onClick={() => {
                 void checkCvStatus();
               }}
-              className="rounded-md bg-slate-700 px-4 py-2 text-sm hover:bg-slate-600"
+              className={BTN_GHOST}
             >
               Refresh Status
             </button>
@@ -926,24 +930,24 @@ export default function DashboardPage() {
                             <span className="font-mono text-emerald-200/90">{row.to}</span>
                           </div>
                           <div className="flex shrink-0 gap-2">
-                            <button
-                              type="button"
-                              disabled={domainSettingsBusy}
-                              title="Accept and save as a saved synonym"
-                              className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
-                              onClick={() => void approvePendingSynonymRow(idx)}
-                            >
-                              Accept
-                            </button>
-                            <button
-                              type="button"
-                              disabled={domainSettingsBusy}
-                              title="Dismiss this suggestion"
-                              className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-50"
-                              onClick={() => void dismissPendingSynonymRow(idx)}
-                            >
-                              Dismiss
-                            </button>
+                <button
+                  type="button"
+                  disabled={domainSettingsBusy}
+                  title="Accept and save as a saved synonym"
+                  className={BTN_PRIMARY_COMPACT}
+                  onClick={() => void approvePendingSynonymRow(idx)}
+                >
+                  Accept
+                </button>
+                <button
+                  type="button"
+                  disabled={domainSettingsBusy}
+                  title="Dismiss this suggestion"
+                  className={BTN_GHOST_SM}
+                  onClick={() => void dismissPendingSynonymRow(idx)}
+                >
+                  Dismiss
+                </button>
                           </div>
                         </li>
                       ))}
@@ -959,7 +963,7 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         disabled={domainSettingsBusy}
-                        className="rounded-md bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                        className={BTN_PRIMARY_COMPACT}
                         onClick={() => void approveAllPendingSynonyms()}
                       >
                         Accept all
@@ -967,7 +971,7 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         disabled={domainSettingsBusy}
-                        className="rounded-md bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600 disabled:opacity-50"
+                        className={BTN_GHOST_SM}
                         onClick={() => void dismissAllPendingSynonyms()}
                       >
                         Dismiss all
@@ -1015,7 +1019,7 @@ export default function DashboardPage() {
               </section>
             ) : null}
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
+            <section className="space-y-4 rounded-2xl border border-slate-800/80 bg-slate-950/35 p-4 ring-1 ring-white/[0.04] sm:p-5">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
                 Target &amp; job input
               </h2>
@@ -1041,7 +1045,7 @@ export default function DashboardPage() {
                     void savePreferredLocation();
                   }}
                   disabled={prefsLocationBusy}
-                  className="rounded-md bg-slate-700 px-4 py-2 text-sm hover:bg-slate-600 disabled:opacity-50"
+                  className={BTN_GHOST}
                 >
                   {prefsLocationBusy ? "Saving…" : "Save target location"}
                 </button>
@@ -1085,7 +1089,7 @@ export default function DashboardPage() {
                 void loadUserPrefsAndOllamaModels();
               }}
               disabled={modelsRefreshing}
-              className="rounded-md bg-slate-700 px-3 py-1.5 text-sm hover:bg-slate-600 disabled:opacity-50"
+              className={BTN_GHOST}
             >
               {modelsRefreshing ? "Refreshing…" : "Refresh Models"}
             </button>
@@ -1101,15 +1105,17 @@ export default function DashboardPage() {
                 void runAnalysis();
               }}
               disabled={!canRunAnalysis}
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm hover:bg-emerald-500 disabled:bg-emerald-900"
+              className={`${BTN_PRIMARY_LG} w-full sm:w-auto`}
             >
             {loadingAnalysis
               ? `Processing with ${selectedModel}... (step ${analysisStep}/3)`
               : "Run Analysis"}
           </button>
-          <p className="text-xs text-slate-400">
-            Please upload a CV and paste a Job Description to start.
-          </p>
+          {!canRunAnalysis && !loadingAnalysis ? (
+            <p className="text-xs text-slate-400">
+              Upload a CV and paste a job description to enable Run Analysis.
+            </p>
+          ) : null}
           <div className="border-t border-slate-700 pt-3">
             <p className="text-sm font-medium mb-2">Refine Results (Persistent Constraint)</p>
             <input
@@ -1119,19 +1125,15 @@ export default function DashboardPage() {
               placeholder='e.g. "I do not want PM roles", "I prefer remote work", "I want full-time only", or "I need to avoid certain countries or cities"'
               className="w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-sm"
             />
-            <button
-              type="button"
-              onClick={saveConstraintOnly}
-              className="mt-2 rounded-md bg-slate-700 px-4 py-2 text-sm hover:bg-slate-600"
-            >
+            <button type="button" onClick={saveConstraintOnly} className={`${BTN_GHOST} mt-2`}>
               Save Constraint
             </button>
           </div>
             </section>
           </div>
 
-          <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
-            <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-5">
+          <div className="space-y-6 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-5 shadow-sm shadow-black/20 ring-1 ring-white/[0.04] lg:sticky lg:top-6 lg:self-start lg:p-6">
+            <section className="space-y-5">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
                   Match output
@@ -1363,7 +1365,7 @@ export default function DashboardPage() {
                     type="button"
                     onClick={() => void submitUserCorrection()}
                     disabled={correctionBusy}
-                    className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600 disabled:opacity-50"
+                    className={BTN_GHOST_SM}
                   >
                     {correctionBusy ? "Saving…" : "Save correction"}
                   </button>
@@ -1568,7 +1570,7 @@ export default function DashboardPage() {
                           void generateApplicationBundle();
                         }}
                         disabled={loadingAssets}
-                        className="w-full rounded-lg bg-blue-600 px-5 py-3.5 text-base font-semibold text-white shadow-lg shadow-blue-900/30 transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:shadow-none"
+                        className={BTN_GHOST_BLUE_LG}
                       >
                         Generate Application Bundle
                       </button>
@@ -1583,41 +1585,43 @@ export default function DashboardPage() {
         </div>
         ) : null}
 
-        <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3">
+        <section className="rounded-2xl border border-slate-800/80 bg-slate-900/50 p-5 ring-1 ring-white/[0.04] space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
             Saved constraints
           </h2>
           {constraints.constraints.length === 0 ? (
             <p className="text-sm text-slate-400">No saved constraints yet.</p>
           ) : (
-            <ul className="max-h-52 space-y-2 overflow-auto pr-1">
+            <div className="max-h-52 space-y-1.5 overflow-auto pr-0.5">
               {constraints.constraints.map((item) => (
-                <li
+                <div
                   key={item}
-                  className="flex items-start justify-between gap-3 rounded-md border border-slate-700 p-2"
+                  className="group flex items-center gap-2 rounded-lg border border-slate-800/90 bg-slate-950/50 px-3 py-2 transition hover:border-slate-700/90 hover:bg-slate-900/70"
                 >
-                  <span className="text-sm text-slate-200">{item}</span>
+                  <span className="min-w-0 flex-1 text-sm leading-snug text-slate-200">{item}</span>
                   <button
                     type="button"
                     onClick={() => {
                       void deleteConstraint(item);
                     }}
-                    className="rounded bg-red-700 px-2 py-1 text-xs hover:bg-red-600"
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-slate-500 opacity-0 transition hover:border-rose-800/50 hover:bg-rose-950/40 hover:text-rose-200 group-hover:opacity-100"
                     disabled={constraintsBusy}
                     aria-label={`Delete constraint: ${item}`}
                   >
-                    X
+                    <span className="text-xs font-semibold" aria-hidden>
+                      ×
+                    </span>
                   </button>
-                </li>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
           {constraints.updated_at ? (
             <p className="text-xs text-slate-500">Updated: {constraints.updated_at}</p>
           ) : null}
         </section>
 
-        <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
+        <section className="rounded-2xl border border-slate-800/80 bg-slate-900/50 p-5 ring-1 ring-white/[0.04] space-y-4">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
             Domain &amp; CV tuning
           </h2>
@@ -1672,7 +1676,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     disabled={domainSettingsBusy}
-                    className="rounded bg-emerald-800 px-2 py-1 text-xs hover:bg-emerald-700 disabled:opacity-50"
+                    className={BTN_PRIMARY_COMPACT}
                     onClick={() => void approvePendingSynonymRow(idx)}
                   >
                     Approve
@@ -1680,7 +1684,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     disabled={domainSettingsBusy}
-                    className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600 disabled:opacity-50"
+                    className={BTN_GHOST_SM}
                     onClick={() => void dismissPendingSynonymRow(idx)}
                   >
                     Dismiss
@@ -1719,7 +1723,7 @@ export default function DashboardPage() {
                   </span>
                   <button
                     type="button"
-                    className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
+                    className={BTN_GHOST_SM}
                     onClick={() =>
                       setSkillSynonymPairs((prev) => prev.filter((_, i) => i !== idx))
                     }
@@ -1732,7 +1736,7 @@ export default function DashboardPage() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                className="rounded bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600"
+                className={BTN_GHOST_SM}
                 onClick={() => setSkillSynonymPairs((prev) => [...prev, { from: "", to: "" }])}
               >
                 Add row
@@ -1741,7 +1745,7 @@ export default function DashboardPage() {
                 type="button"
                 disabled={domainSettingsBusy}
                 onClick={() => void saveSkillSynonymsToApi()}
-                className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                className={BTN_PRIMARY_COMPACT}
               >
                 Save synonyms
               </button>
@@ -1751,7 +1755,7 @@ export default function DashboardPage() {
                     type="button"
                     disabled={domainSettingsBusy}
                     onClick={() => void approveAllPendingSynonyms()}
-                    className="rounded bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                    className={BTN_PRIMARY_COMPACT}
                   >
                     Approve all suggested
                   </button>
@@ -1759,7 +1763,7 @@ export default function DashboardPage() {
                     type="button"
                     disabled={domainSettingsBusy}
                     onClick={() => void dismissAllPendingSynonyms()}
-                    className="rounded bg-slate-600 px-3 py-1.5 text-xs hover:bg-slate-500 disabled:opacity-50"
+                    className={BTN_GHOST_SM}
                   >
                     Dismiss all suggested
                   </button>
@@ -1782,8 +1786,7 @@ export default function DashboardPage() {
                   className="rounded border border-slate-700 bg-slate-950 px-2 py-1"
                 >
                   <option value="default">Default (veto ok)</option>
-                  <option value="never_veto">Never veto</option>
-                  <option value="soft_only">Soft only</option>
+                  <option value="strong_preference">Strong preference (no veto)</option>
                 </select>
               </label>
               <label className="flex flex-col gap-1 text-xs">
@@ -1794,8 +1797,7 @@ export default function DashboardPage() {
                   className="rounded border border-slate-700 bg-slate-950 px-2 py-1"
                 >
                   <option value="default">Default (veto ok)</option>
-                  <option value="never_veto">Never veto</option>
-                  <option value="soft_only">Soft only</option>
+                  <option value="strong_preference">Strong preference (no veto)</option>
                 </select>
               </label>
               <label className="flex flex-col gap-1 text-xs">
@@ -1806,8 +1808,7 @@ export default function DashboardPage() {
                   className="rounded border border-slate-700 bg-slate-950 px-2 py-1"
                 >
                   <option value="default">Default (veto ok)</option>
-                  <option value="never_veto">Never veto</option>
-                  <option value="soft_only">Soft only</option>
+                  <option value="strong_preference">Strong preference (no veto)</option>
                 </select>
               </label>
             </div>
@@ -1815,7 +1816,7 @@ export default function DashboardPage() {
               type="button"
               disabled={domainSettingsBusy}
               onClick={() => void saveConstraintTacticsToApi()}
-              className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+              className={BTN_PRIMARY_COMPACT}
             >
               Save tactics
             </button>

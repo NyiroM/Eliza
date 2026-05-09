@@ -20,3 +20,8 @@ export async function addEvaluatedJobIds(ids: string[]): Promise<void> {
   for (const id of ids) cur.add(id);
   await writeFile(DISCOVERY_EVALUATED_IDS_PATH, JSON.stringify([...cur], null, 2), "utf-8");
 }
+
+export async function resetEvaluatedJobIds(): Promise<void> {
+  await mkdir(DISCOVERY_DIR, { recursive: true });
+  await writeFile(DISCOVERY_EVALUATED_IDS_PATH, JSON.stringify([], null, 2), "utf-8");
+}

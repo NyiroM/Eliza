@@ -45,9 +45,8 @@ Include one object per input keyword; "keyword" must match the input string exac
 
   const { data, source } = await generateJsonWithOllama<SynonymPayload>(prompt, EMPTY, {
     model,
-    role: "analysis",
+    role: "extract_cv",
     num_predict: 1200,
-    temperature: 0.15,
   });
 
   const rows = Array.isArray(data.by_keyword) ? data.by_keyword : [];

@@ -80,15 +80,28 @@ export async function readDiscoveryProgress(): Promise<DiscoveryProgressState> {
   }
 }
 
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
 export function progressFetching(provider: DiscoveryProviderId, message: string): Promise<void> {
-  return setDiscoveryProgress({ phase: "fetching", provider, message });
+  return setDiscoveryProgress({
+    phase: "fetching",
+    provider,
+    message,
+    step_started_at: nowIso(),
+  });
 }
 
 export function progressQueueing(message: string, initSession?: boolean): Promise<void> {
+  const t = nowIso();
   return setDiscoveryProgress({
     phase: "queueing",
     message,
-    ...(initSession ? { sessionLiveStats: defaultSessionLiveStats() } : {}),
+    step_started_at: t,
+    ...(initSession
+      ? { sessionLiveStats: defaultSessionLiveStats(), pipeline_run_started_at: t }
+      : {}),
   });
 }
 
@@ -100,23 +113,30 @@ export async function progressAwaitingClientDrain(queueRemaining: number): Promi
     phase: "queueing",
     message: `${queueRemaining} job(s) queued for deep analysis — continuing in the background…`,
     sessionLiveStats: { ...s, queueRemaining },
+    step_started_at: nowIso(),
   });
 }
 
 export function progressAnalyzing(index: number, total: number, message: string): Promise<void> {
+  const t = nowIso();
   return setDiscoveryProgress({
     phase: "analyzing",
     analysisIndex: index,
     analysisTotal: total,
     message,
+    step_started_at: t,
+    ...(index === 1 ? { eval_batch_started_at: t } : {}),
   });
 }
 
 export function progressDraining(index: number, total: number, message: string): Promise<void> {
+  const t = nowIso();
   return setDiscoveryProgress({
     phase: "draining",
     analysisIndex: index,
     analysisTotal: total,
     message,
+    step_started_at: t,
+    ...(index === 1 ? { eval_batch_started_at: t } : {}),
   });
 }

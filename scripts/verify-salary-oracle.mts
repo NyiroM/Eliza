@@ -1,16 +1,11 @@
 #!/usr/bin/env node
 
-import path from 'path';
-import { fileURLToPath } from 'url';
 import * as salaryOracleModule from '../lib/salary-oracle';
 import type { JobParseResult } from '../types/job';
 
 const runSalaryOracle =
   (salaryOracleModule as unknown as { runSalaryOracle?: typeof import('../lib/salary-oracle').runSalaryOracle }).runSalaryOracle ??
   (salaryOracleModule as unknown as { default?: { runSalaryOracle?: typeof import('../lib/salary-oracle').runSalaryOracle } }).default?.runSalaryOracle;
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..');
 
 // Minimal test fixture to avoid needing the real PDF in CI
 const testFixture = [

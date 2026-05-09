@@ -130,12 +130,48 @@ function parseSalaryFloorFromConstraints(
   const joined = constraints.join(' ');
   const re =
     /(?:(USD|EUR|GBP|HUF|PLN|JPY|[$€£¥])\s*)?(\d{1,3}(?:[\s.,]\d{3})+|\d{4,9})(?:\s*(USD|EUR|GBP|HUF|PLN|JPY|[$€£¥]))?/gi;
+
+  const minIntentHints = /\b(minimum|min\.?|at\s+least|>=|floor|salary|compensation|gross|net|monthly|month|\/\s*day|per\s+day|daily|days?)\b/i;
+  const hardNoiseHints = /\b(202[0-9]|employees?|countries?|years?)\b/i;
+
+  let best: { amount: number; currency: CurrencyCode; score: number } | null = null;
+
   for (const m of joined.matchAll(re)) {
     const amount = parseSmartNumber(m[2]);
     if (!amount || amount < 100) continue;
     const curr = normalizeCurrency(m[1] ?? m[3]) ?? fallbackCurrency;
-    return { amount, currency: curr };
+
+    // Ignore obvious non-salary artifacts (years, employee counts) when context gives it away.
+    const idx = typeof m.index === 'number' ? m.index : -1;
+    const before = idx >= 0 ? joined.slice(Math.max(0, idx - 120), idx) : '';
+    const after = idx >= 0 ? joined.slice(idx, Math.min(joined.length, idx + 120)) : '';
+    const window = `${before} ${after}`;
+    if (hardNoiseHints.test(window) && !minIntentHints.test(window)) continue;
+
+    // Per-currency plausibility guardrails (avoid picking random small numbers from other constraints).
+    if (curr === 'HUF' && amount < 200_000) continue;
+    if (curr !== 'HUF' && amount < 800) continue;
+
+    let score = 0;
+    if (minIntentHints.test(window)) score += 5;
+    if (/\bminimum\b/i.test(window)) score += 3;
+    if (/\b(gross|net)\b/i.test(window)) score += 1;
+    if (/\b(monthly|month)\b/i.test(window)) score += 1;
+    if (/\b(HUF|FT|FORINT)\b/i.test(window) && curr === 'HUF') score += 1;
+
+    // Prefer larger floors when intent looks like “minimum salary”.
+    const nominal = curr === 'HUF' ? amount / 100_000 : amount / 1_000;
+    score += Math.min(3, Math.max(0, Math.log10(Math.max(1, nominal))));
+
+    if (!best || score > best.score || (score === best.score && amount > best.amount)) {
+      best = { amount, currency: curr, score };
+    }
   }
+
+  if (best) {
+    return { amount: best.amount, currency: best.currency };
+  }
+
   return {
     amount:
       fallbackCurrency === 'HUF'
@@ -183,7 +219,6 @@ function parseSmartNumber(raw: string): number | null {
   if (!cleaned) return null;
   const decimalTailMatch = cleaned.match(/[.,](\d{2})$/);
   if (decimalTailMatch) {
-    const decimalSep = cleaned[cleaned.length - 3];
     const intPart = cleaned.slice(0, -3).replace(/[.,]/g, '');
     const fractionalPart = cleaned.slice(-2);
     const normalized = `${intPart}.${fractionalPart}`;
@@ -217,6 +252,14 @@ function hasExcludedContext(text: string): boolean {
 
 function hasDayRateHint(text: string): boolean {
   return /(?:\/\s*day|per\s+day|daily|day-rate|contracting|napi)/i.test(text);
+}
+
+function hasYearRateHint(text: string): boolean {
+  return /(?:\/\s*year|per\s+year|yearly|annual(?:ly)?|\/\s*yr|per\s+annum|p\.?a\.?)/i.test(text);
+}
+
+function hasMonthRateHint(text: string): boolean {
+  return /(?:\/\s*month|per\s+month|monthly|\/\s*mo)\b/i.test(text);
 }
 
 function isFullTimeOrContingent(jobType: string): boolean {
@@ -262,6 +305,13 @@ function inferMonthlyFromDailyIfNeeded(
   return value;
 }
 
+function inferMonthlyFromAnnualIfNeeded(value: number, text: string): number {
+  // If both month and year hints exist, keep as-is (ambiguous; the parser already prefers nearby salary markers).
+  if (!hasYearRateHint(text) || hasMonthRateHint(text)) return value;
+  // Annual → monthly.
+  return Math.round(value / 12);
+}
+
 function extractPostedSalary(jobText: string, currency: CurrencyCode): {
   estimated_min: number;
   estimated_max: number;
@@ -296,6 +346,9 @@ function extractPostedSalary(jobText: string, currency: CurrencyCode): {
 
     let min = second ? Math.min(first, second) : first;
     let max = second ? Math.max(first, second) : first;
+
+    min = inferMonthlyFromAnnualIfNeeded(min, match[0]);
+    max = inferMonthlyFromAnnualIfNeeded(max, match[0]);
 
     min = inferMonthlyFromDailyIfNeeded(min, currency, match[0]);
     max = inferMonthlyFromDailyIfNeeded(max, currency, match[0]);
@@ -527,6 +580,9 @@ export const runSalaryOracle = async (params: {
     };
   }
 
+  // Hays HU 2026 is a HUF monthly benchmark (regardless of job-posting currency hints).
+  const benchmarkCurrency: CurrencyCode = 'HUF';
+
   const seniority = mapSeniorityToHays(params.jobParsed.required_seniority);
   const jobTitle = params.jobText;
 
@@ -551,11 +607,11 @@ export const runSalaryOracle = async (params: {
   if (!best.row) {
     // Fallback: pick first row and mark low confidence
     const first = pool[0];
-    const min = scaleHufDayLikeBandIfNeeded(first.min, currency, params.jobParsed.job_type);
-    const max = scaleHufDayLikeBandIfNeeded(first.max, currency, params.jobParsed.job_type);
+    const min = scaleHufDayLikeBandIfNeeded(first.min, benchmarkCurrency, params.jobParsed.job_type);
+    const max = scaleHufDayLikeBandIfNeeded(first.max, benchmarkCurrency, params.jobParsed.job_type);
     const modus = Math.round((min + max) / 2);
-    const normalizedMin = convertCurrency(min, currency, comparisonCurrency);
-    const normalizedMax = convertCurrency(max, currency, comparisonCurrency);
+    const normalizedMin = convertCurrency(min, benchmarkCurrency, comparisonCurrency);
+    const normalizedMax = convertCurrency(max, benchmarkCurrency, comparisonCurrency);
     const normalizedModus = Math.round((normalizedMin + normalizedMax) / 2);
     const status = computeMatchStatus(normalizedModus, floorInComparison);
     return {
@@ -567,9 +623,9 @@ export const runSalaryOracle = async (params: {
         estimated_max: max,
         estimated_modus: modus,
         match_status: status,
-        rationale: `Low confidence: no exact match. Using ${first.hays_label} (${formatCurrency(modus, currency)}).`,
+        rationale: `Low confidence: no exact match. Using ${first.hays_label} (${formatCurrency(modus, benchmarkCurrency)}).`,
         source: 'market_benchmark',
-        currency,
+        currency: benchmarkCurrency,
         base_salary: {
           estimated_min: min,
           estimated_max: max,
@@ -583,8 +639,8 @@ export const runSalaryOracle = async (params: {
         normalized_estimated_min: normalizedMin,
         normalized_estimated_max: normalizedMax,
         normalized_estimated_modus: normalizedModus,
-        conversion_applied: currency !== comparisonCurrency,
-        exchange_rate_used: getExchangeRateUsed(currency, comparisonCurrency),
+        conversion_applied: benchmarkCurrency !== comparisonCurrency,
+        exchange_rate_used: getExchangeRateUsed(benchmarkCurrency, comparisonCurrency),
       },
     };
   }
@@ -602,12 +658,12 @@ export const runSalaryOracle = async (params: {
     max = Math.round(row.max * 20);
     modus = Math.round(row.modus * 20);
   }
-  min = scaleHufDayLikeBandIfNeeded(min, currency, params.jobParsed.job_type);
-  max = scaleHufDayLikeBandIfNeeded(max, currency, params.jobParsed.job_type);
+  min = scaleHufDayLikeBandIfNeeded(min, benchmarkCurrency, params.jobParsed.job_type);
+  max = scaleHufDayLikeBandIfNeeded(max, benchmarkCurrency, params.jobParsed.job_type);
   modus = Math.round((min + max) / 2);
 
-  const normalizedMin = convertCurrency(min, currency, comparisonCurrency);
-  const normalizedMax = convertCurrency(max, currency, comparisonCurrency);
+  const normalizedMin = convertCurrency(min, benchmarkCurrency, comparisonCurrency);
+  const normalizedMax = convertCurrency(max, benchmarkCurrency, comparisonCurrency);
   const normalizedModus = Math.round((normalizedMin + normalizedMax) / 2);
 
   const status = computeMatchStatus(normalizedModus, floorInComparison);
@@ -616,14 +672,14 @@ export const runSalaryOracle = async (params: {
   const delta = ((normalizedModus - floorInComparison) / floorInComparison) * 100;
   let rationale: string;
   if (status === 'above_limit') {
-    rationale = `Based on Hays 2026, the typical salary for this ${seniority} role is ${formatCurrency(modus, currency)}, which is ${Math.round(delta)}% above your minimum.`;
+    rationale = `Based on Hays 2026, the typical salary for this ${seniority} role is ${formatCurrency(modus, benchmarkCurrency)}, which is ${Math.round(delta)}% above your minimum.`;
   } else if (status === 'borderline') {
-    rationale = `Based on Hays 2026, the typical salary for this ${seniority} role is ${formatCurrency(modus, currency)}, which is around your minimum.`;
+    rationale = `Based on Hays 2026, the typical salary for this ${seniority} role is ${formatCurrency(modus, benchmarkCurrency)}, which is around your minimum.`;
   } else {
-    rationale = `Based on Hays 2026, the typical salary for this ${seniority} role is ${formatCurrency(modus, currency)}, which is ${Math.round(-delta)}% below your minimum.`;
+    rationale = `Based on Hays 2026, the typical salary for this ${seniority} role is ${formatCurrency(modus, benchmarkCurrency)}, which is ${Math.round(-delta)}% below your minimum.`;
   }
   if (status === 'below_limit' && bonusDetected && benefitsValue) {
-    rationale = `The base salary is ${formatCurrency(modus, currency)}, which is below your ${formatCurrency(floorInComparison, comparisonCurrency)} goal, but the total package includes bonuses and ${benefitsValue} which may bridge the gap.`;
+    rationale = `The base salary is ${formatCurrency(modus, benchmarkCurrency)}, which is below your ${formatCurrency(floorInComparison, comparisonCurrency)} goal, but the total package includes bonuses and ${benefitsValue} which may bridge the gap.`;
   }
 
   return {
@@ -637,7 +693,7 @@ export const runSalaryOracle = async (params: {
       match_status: status,
       rationale,
       source: 'market_benchmark',
-      currency,
+      currency: benchmarkCurrency,
       base_salary: {
         estimated_min: min,
         estimated_max: max,
@@ -651,8 +707,8 @@ export const runSalaryOracle = async (params: {
       normalized_estimated_min: normalizedMin,
       normalized_estimated_max: normalizedMax,
       normalized_estimated_modus: normalizedModus,
-      conversion_applied: currency !== comparisonCurrency,
-      exchange_rate_used: getExchangeRateUsed(currency, comparisonCurrency),
+      conversion_applied: benchmarkCurrency !== comparisonCurrency,
+      exchange_rate_used: getExchangeRateUsed(benchmarkCurrency, comparisonCurrency),
     },
   };
 };
@@ -662,6 +718,8 @@ export const suggestHaysEquivalent = async (
   title: string,
   model?: string,
 ): Promise<{ label: string; confidence: number } | null> => {
+  void title;
+  void model;
   // Placeholder: in a future iteration, call LLM to map ambiguous titles like "Tech Wizard" to closest Hays label.
   return null;
 };

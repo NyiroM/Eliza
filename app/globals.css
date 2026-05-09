@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Tailwind v4: scan shared UI strings (e.g. lib/ui/dashboardButtons.ts) — default detection can miss ../lib */
+@source "../lib/**/*.{ts,mts}";
 
 body {
   margin: 0;

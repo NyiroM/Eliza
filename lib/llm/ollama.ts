@@ -14,8 +14,18 @@ export const OLLAMA_MAX_PREDICT = 8192;
 /** Default context window for all Ollama calls. */
 export const OLLAMA_NUM_CTX = 16384;
 
-/** Default low temperature for analytical consistency. */
-export const OLLAMA_DEFAULT_TEMPERATURE = 0.1;
+/** Semantic / job–CV analysis (`role: analysis`) — Cell_Robot_Flow_V2 benchmark winner. */
+export const OLLAMA_SEMANTIC_TEMPERATURE = 0.1;
+export const OLLAMA_SEMANTIC_TOP_K = 40;
+export const OLLAMA_SEMANTIC_REPEAT_PENALTY = 1.15;
+
+/** Strict structured extraction (`role: extract_cv`) — Cell_Robot_Stiff benchmark profile. */
+export const OLLAMA_EXTRACT_TEMPERATURE = 0;
+export const OLLAMA_EXTRACT_TOP_K = 1;
+export const OLLAMA_EXTRACT_REPEAT_PENALTY = 1.1;
+
+/** @deprecated Use OLLAMA_SEMANTIC_TEMPERATURE; kept as alias for callers. */
+export const OLLAMA_DEFAULT_TEMPERATURE = OLLAMA_SEMANTIC_TEMPERATURE;
 
 type OllamaGenerateResponse = {
   response?: unknown;
@@ -39,9 +49,9 @@ export type GenerateJsonOptions = {
   /** Ollama model name (must exist locally). Default: app `DEFAULT_OLLAMA_MODEL` when omitted. */
   model?: string;
   /**
-   * analysis: analytical consistency (low temperature).
-   * extract_cv: grounded extraction (low temperature).
-   * creative_coach / creative_rewrite: creative prose (higher temperature).
+   * analysis: semantic scoring / fit review (benchmark Flow_V2 sampling).
+   * extract_cv: stiff structured extraction (benchmark Stiff sampling).
+   * creative_coach / creative_rewrite: human-facing prose JSON; factory sampling unless options override.
    */
   role?: JsonGenerateRole;
   /**
@@ -49,7 +59,10 @@ export type GenerateJsonOptions = {
    */
   systemAppend?: string;
   /**
-   * Optional sampling parameters. If not provided, Ollama uses model defaults.
+   * Optional sampling overrides. Defaults depend on `role`:
+   * - `analysis`: semantic match (T=0.1, top_k=40, repeat_penalty=1.15).
+   * - `extract_cv`: stiff extraction (T=0, top_k=1, repeat_penalty=1.1).
+   * - `creative_*`: only `num_ctx` / `num_predict` unless you set these explicitly (model “factory” sampling).
    */
   temperature?: number;
   top_p?: number;
@@ -81,7 +94,7 @@ const OLLAMA_CYNICAL_AUDITOR =
   "You operate as a ruthless, cynical auditor of evidence: treat every claim as guilty until the supplied text proves it. Anti-hallucination: never invent skills, employers, degrees, locations, salaries, or constraints. If evidence is thin, use null, empty arrays, \"unknown\", or conservative values—never fabricate to fill fields.";
 
 /** Pipeline + job posting analysis / scoring */
-const OLLAMA_ANALYSIS_SYSTEM = `${OLLAMA_JSON_ENGINE} ${OLLAMA_CYNICAL_AUDITOR}`;
+const OLLAMA_ANALYSIS_SYSTEM = `${OLLAMA_JSON_ENGINE} ${OLLAMA_CYNICAL_AUDITOR} Produce one valid JSON object; keep score_components and mathematical_breakdown internally consistent with fit_score.`;
 
 /** CV structured extraction: strict grounding, no “auditor” tone */
 const OLLAMA_EXTRACT_CV_SYSTEM = `${OLLAMA_JSON_ENGINE} Extract only information clearly grounded in the CV text; do not invent roles, dates, employers, or skills.`;
@@ -92,14 +105,6 @@ You are a professional career coach. Generate exactly 3 targeted interview quest
 
 /** CV bullet rewrite */
 const OLLAMA_CREATIVE_REWRITE_SYSTEM = `${OLLAMA_JSON_ENGINE} You are an expert CV editor: improve clarity and impact without inventing facts, metrics, or tools.`;
-
-const CREATIVE_NUM_PREDICT = OLLAMA_MAX_PREDICT;
-/** Default strict generation budget before model-specific bumps. */
-const STRICT_NUM_PREDICT_BASE = OLLAMA_MAX_PREDICT;
-/** DeepSeek-R1: long hidden reasoning before JSON — keep headroom for CoT + payload. */
-const STRICT_NUM_PREDICT_DEEPSEEK_R1 = OLLAMA_MAX_PREDICT;
-/** Any tag containing R1-style reasoning needs at least this much headroom. */
-const STRICT_NUM_PREDICT_R1_MIN = OLLAMA_MAX_PREDICT;
 
 const NUM_CTX_GLOBAL = OLLAMA_NUM_CTX;
 
@@ -128,11 +133,6 @@ function isGemmaModel(modelLower: string): boolean {
   return /\bgemma/i.test(modelLower);
 }
 
-/** Models where Mirostat tends to behave poorly — fall back to top_p + temperature. */
-function creativePrefersClassicSampling(modelLower: string): boolean {
-  return /embed|embedding|rerank|clip|vl-|vision|mm-/i.test(modelLower);
-}
-
 export function getOllamaSystemPrompt(role: JsonGenerateRole): string {
   switch (role) {
     case "creative_coach":
@@ -152,17 +152,38 @@ export function getOllamaSystemPrompt(role: JsonGenerateRole): string {
  * JSON mode is set only at the request root as `format: "json"` (see `ollamaGenerateRaw`).
  */
 export function getOllamaOptions(model: string, role: JsonGenerateRole, options?: GenerateJsonOptions): Record<string, unknown> {
+  const num_ctx = options?.num_ctx ?? NUM_CTX_GLOBAL;
+  const num_predict = options?.num_predict ?? OLLAMA_MAX_PREDICT;
+
+  if (role === "creative_coach" || role === "creative_rewrite") {
+    const opts: Record<string, unknown> = { num_ctx, num_predict };
+    if (options?.temperature !== undefined) opts.temperature = options.temperature;
+    if (options?.top_p !== undefined) opts.top_p = options.top_p;
+    if (options?.top_k !== undefined) opts.top_k = options.top_k;
+    if (options?.repeat_penalty !== undefined) opts.repeat_penalty = options.repeat_penalty;
+    return opts;
+  }
+
+  if (role === "extract_cv") {
+    const opts: Record<string, unknown> = {
+      num_ctx,
+      num_predict,
+      temperature: options?.temperature ?? OLLAMA_EXTRACT_TEMPERATURE,
+      top_k: options?.top_k ?? OLLAMA_EXTRACT_TOP_K,
+      repeat_penalty: options?.repeat_penalty ?? OLLAMA_EXTRACT_REPEAT_PENALTY,
+    };
+    if (options?.top_p !== undefined) opts.top_p = options.top_p;
+    return opts;
+  }
+
   const opts: Record<string, unknown> = {
-    num_ctx: options?.num_ctx ?? NUM_CTX_GLOBAL,
-    temperature: options?.temperature ?? OLLAMA_DEFAULT_TEMPERATURE,
-    num_predict: options?.num_predict ?? OLLAMA_MAX_PREDICT,
+    num_ctx,
+    num_predict,
+    temperature: options?.temperature ?? OLLAMA_SEMANTIC_TEMPERATURE,
+    top_k: options?.top_k ?? OLLAMA_SEMANTIC_TOP_K,
+    repeat_penalty: options?.repeat_penalty ?? OLLAMA_SEMANTIC_REPEAT_PENALTY,
   };
-
-  // Allow caller to override any sampling parameter (only if explicitly provided)
   if (options?.top_p !== undefined) opts.top_p = options.top_p;
-  if (options?.top_k !== undefined) opts.top_k = options.top_k;
-  if (options?.repeat_penalty !== undefined) opts.repeat_penalty = options.repeat_penalty;
-
   return opts;
 }
 

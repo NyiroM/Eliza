@@ -1,6 +1,6 @@
 // lib/discovery/processEvalQueue.ts
-import type { DiscoveryProviderId } from "../../types/discovery";
-import type { JobSourceKind, PipelineOutput } from "../../types/pipeline";
+import type { DiscoveryProviderId, DiscoverySalaryForecastSnapshot } from "../../types/discovery";
+import type { JobSourceKind, PipelineOutput, SalaryAnalysis } from "../../types/pipeline";
 import { DEFAULT_OLLAMA_MODEL, DISCOVERY_FAILURE_MAX_ATTEMPTS } from "../../config/constants";
 import { runPipelineDetailed } from "../pipeline";
 import { addEvaluatedJobIds, loadEvaluatedJobIds } from "./evaluatedStore";
@@ -12,6 +12,16 @@ import { loadDiscoverySettings } from "./settings";
 import { discoveryEvalQuarterIndex, discoveryTerminalLog } from "./discoveryTerminalLog";
 import { getEvalQueueLength, returnToEvalQueue, takeFromEvalQueue } from "./evalQueue";
 import { progressAnalyzing, progressDraining } from "./progress";
+import { loadSuppressedJobIds } from "./suppressedStore";
+
+function salaryForecastSnapshot(s: SalaryAnalysis | null | undefined): DiscoverySalaryForecastSnapshot | undefined {
+  if (!s) return undefined;
+  return {
+    match_status: s.match_status,
+    source: s.source,
+    rationale: s.rationale.trim().slice(0, 240),
+  };
+}
 
 function jobSourceForProvider(p: DiscoveryProviderId): JobSourceKind {
   if (p === "indeed") return "discovery_indeed";
@@ -68,6 +78,8 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   const threshold = Math.min(100, Math.max(0, settings.match_notify_threshold_percent));
   const model = opts.model.trim() || DEFAULT_OLLAMA_MODEL;
   const evaluated = await loadEvaluatedJobIds();
+  const suppressed = await loadSuppressedJobIds();
+  for (const id of suppressed) evaluated.add(id);
   const batch = await takeFromEvalQueue(opts.maxItems, evaluated);
 
   let newHighMatches = 0;
@@ -120,18 +132,21 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
         await appendNewMatch({
           job_id: job.id,
           provider: job.provider,
+          company: job.company ?? null,
           title: job.title,
           url: job.url,
           fit_score: r.fit_score,
           constraint_veto: Boolean(r.constraint_veto),
           evaluated_at: new Date().toISOString(),
           one_sentence_summary: r.one_sentence_summary,
+          salary_forecast: salaryForecastSnapshot(r.salary_analysis ?? null),
         });
       } else {
         const fitScore = typeof r.fit_score === "number" ? r.fit_score : 0;
         await appendNonMatch({
           job_id: job.id,
           provider: job.provider,
+          company: job.company ?? null,
           title: job.title,
           url: job.url,
           fit_score: fitScore,
@@ -139,6 +154,7 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
           evaluated_at: new Date().toISOString(),
           one_sentence_summary: r.one_sentence_summary?.trim() || undefined,
           not_match_reason: buildNotMatchReason(r, threshold),
+          salary_forecast: salaryForecastSnapshot(r.salary_analysis ?? null),
         });
       }
     } catch (e) {

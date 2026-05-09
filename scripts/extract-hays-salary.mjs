@@ -1,13 +1,9 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import pdf from 'pdf2json';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-
-// Local PDF path (gitignored storage/)
-const pdfPath = path.join(repoRoot, 'storage', 'HU-Hays Hungary Salary Guide 2026.pdf');
 
 // Output JSON path (committed)
 const outDir = path.join(repoRoot, 'data', 'salary');
@@ -24,20 +20,6 @@ console.log('Extracting Hays HU 2026 salary table from PDF...');
 // This is a best-effort heuristic; manual QA is expected.
 
 const rows = [];
-
-// Helper: clean role string
-function cleanRole(s) {
-  return (s || '').trim().replace(/\s+/g, ' ').replace(/["']/g, '');
-}
-
-// Helper: parse number with commas
-function parseHuf(s) {
-  if (!s) return null;
-  const m = String(s).trim().match(/([\d\s,]+)/);
-  if (!m) return null;
-  const n = parseInt(m[1].replace(/\s|,/g, ''), 10);
-  return Number.isFinite(n) ? n : null;
-}
 
 // Simulate extraction: in practice you would parse the PDF text and map tables.
 // For now, we'll create a minimal fixture that satisfies the self-test.

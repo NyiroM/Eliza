@@ -65,7 +65,7 @@ All strings EN.
 CRITICAL_GAPS: ${JSON.stringify(missingLower)}.
 TRANSFERABLE_SKILLS (unused superpowers): ${JSON.stringify(irrelevantExtraSkills)}.
 
-CONSTRAINT_TACTICS (per-domain): ${JSON.stringify(params.tactics.tactics)}. Keys: location | remote_zone | compensation. Values: default | never_veto | soft_only. For never_veto or soft_only on a domain, never set vetoed=true for clashes that are only about that domain — use negative constraint_delta instead. default = normal veto rules.
+CONSTRAINT_TACTICS (per-domain): ${JSON.stringify(params.tactics.tactics)}. Keys: location | remote_zone | compensation. Values: default | strong_preference. For strong_preference on a domain, never set vetoed=true for clashes that are only about that domain — apply a large negative constraint_delta (typically -15..-40) instead. default = normal veto rules.
 USER_SKILL_SYNONYMS (server already canonicalized lists; use for narrative and gap notes only): ${params.skillSynonymsPromptJson}
 
 VETO (decide first): vetoed=true on any hard constraint clash (e.g. user bans a country/region and the job is based there, OR user explicitly excludes a required skill), subject to CONSTRAINT_TACTICS. fit_score=0, score_components all 0, veto_reason one clear EN sentence naming the exact conflict; veto_reason MUST include a short quoted substring from JOB_TEXT or CONSTRAINTS (ASCII double quotes) proving the clash. breakdown ends Final Score: 0%. Else vetoed=false.
@@ -88,6 +88,9 @@ Do NOT infer social isolation from a city name alone. "Work with people" is a so
 
 JOB_METADATA${metaNote}: ${JSON.stringify({ ...params.jobBoardMetadata, optional_skills: params.jobStructForScorer.optional_skills })}
 CONSTRAINTS: ${JSON.stringify(params.constraints)} HINTS: ${JSON.stringify(params.constraintHints)}
+
+LOGISTICS_AND_PHYSICAL_REQUIREMENTS (common-sense deduction): When the job posting states a physical or logistical requirement (examples: willingness to travel, driving licence, mobility, frequent site visits, on-site presence, regional coverage), apply normal professional inference from the CV. If past job titles and concrete duties strongly imply the requirement is met — e.g. area sales, field service, on-site commissioning, multi-site or multi-region delivery work when the posting expects travel or driving — treat that requirement as satisfied for scoring. Do not apply negative constraint_delta and do not keep the item in missing_skills solely because an exact keyword (e.g. "driving licence") is absent when the employment history clearly establishes equivalent capability. Cite the implied pattern briefly in mathematical_breakdown / narrative instead of treating it as a hard gap.
+
 CV_SKILLS: ${JSON.stringify(params.cvSkills)} CV_STORIES: ${JSON.stringify(params.coreStories.slice(0, 6))}
 CV_PRUNED:
 ${params.cvSnippet.slice(0, SEMANTIC_SCORER_PROMPT_LIMITS.cvSnippetChars)}

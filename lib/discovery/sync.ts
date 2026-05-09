@@ -6,6 +6,8 @@ import { getKeywordsForSync } from "./keywordSync";
 import { loadDiscoverySettings, patchProviderState, saveDiscoverySettings } from "./settings";
 import { getEvalQueueLength, mergeIntoEvalQueue, pruneEvalQueue } from "./evalQueue";
 import { loadEvaluatedJobIds } from "./evaluatedStore";
+import { loadSuppressedJobIds } from "./suppressedStore";
+import { loadDupeIndex } from "./dupeIndexStore";
 import { processEvalQueue } from "./processEvalQueue";
 import {
   clearDiscoveryProgress,
@@ -42,11 +44,21 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
 
   const errors: Partial<Record<DiscoveryProviderId, string>> = {};
   const duplicatesSkipped: Partial<Record<DiscoveryProviderId, number>> = {};
+  const crossProviderDuplicatesSkipped: Partial<Record<DiscoveryProviderId, number>> = {};
   let jobsAdded = 0;
   const existing = await loadDiscoveredJobIds();
   const newJobsBuffer: DiscoveredJob[] = [];
+  const dupeIndex = await loadDupeIndex();
 
   try {
+    // Warm the dupe index from recent catalog rows (cheap, helps cross-provider dedupe immediately).
+    if (existing.size > 0 && dupeIndex.count() === 0) {
+      const tail = await loadDiscoveredJobsTail(1400);
+      for (const j of tail) {
+        dupeIndex.recordJob(j);
+      }
+    }
+
     const orderedPhrases = uniquePhrasesPreserveOrder(getKeywordsForSync(settings));
     if (orderedPhrases.length === 0) {
       discoveryTerminalLog("phase=blocked reason=no_keywords");
@@ -93,6 +105,7 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
               fetchPhrase: ev.phrase,
               keywordsInListTotal: ev.keywordsInListTotal,
               fetchSeedsTotal: ev.seedsTotal,
+              step_started_at: new Date().toISOString(),
               message: `${PROVIDER_LOG_LABEL[prov]} · phrase ${ev.seedIndex1Based}/${ev.seedsTotal} in this source’s pass — “${short}” · ${ev.keywordsInListTotal} phrase(s) in Search keywords`,
             });
             return;
@@ -107,6 +120,7 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
             keywordsInListTotal: ev.keywordsInListTotal,
             fetchSeedsTotal: ev.seedsTotal,
             fetchPhraseDurationMs: ev.durationMs,
+            step_started_at: new Date().toISOString(),
             message: `${PROVIDER_LOG_LABEL[prov]} · finished “${short}” in ${(ev.durationMs / 1000).toFixed(1)}s — ${ev.uniqueCount} unique listing(s) for this source so far · ${ev.keywordsInListTotal} phrase(s) in Search keywords`,
           });
         },
@@ -127,14 +141,32 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
         continue;
       }
 
-      const fresh = jobs.filter((j) => !existing.has(j.id) && !newJobsBuffer.some((x) => x.id === j.id));
-      const skipped = jobs.length - fresh.length;
+      const fresh: DiscoveredJob[] = [];
+      let skippedIdDup = 0;
+      let skippedCrossProvider = 0;
+      for (const j of jobs) {
+        if (existing.has(j.id) || newJobsBuffer.some((x) => x.id === j.id)) {
+          skippedIdDup += 1;
+          continue;
+        }
+        const dupe = dupeIndex.findDuplicate(j);
+        if (dupe) {
+          skippedCrossProvider += 1;
+          continue;
+        }
+        fresh.push(j);
+      }
+      const skipped = skippedIdDup;
       if (skipped > 0) {
         duplicatesSkipped[pid] = (duplicatesSkipped[pid] ?? 0) + skipped;
+      }
+      if (skippedCrossProvider > 0) {
+        crossProviderDuplicatesSkipped[pid] = (crossProviderDuplicatesSkipped[pid] ?? 0) + skippedCrossProvider;
       }
       for (const j of fresh) {
         existing.add(j.id);
         newJobsBuffer.push(j);
+        dupeIndex.recordJob(j);
       }
       settings = patchProviderState(settings, pid, {
         last_run_at: new Date().toISOString(),
@@ -145,13 +177,14 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
       });
       const errPart = error ? ` partial_error=${error.slice(0, 80)}${error.length > 80 ? "…" : ""}` : "";
       discoveryTerminalLog(
-        `phase=fetch_done provider=${pid} wall_ms=${Date.now() - providerWallMs} jobs=${jobs.length} new=${fresh.length} dup=${skipped}${errPart}`,
+        `phase=fetch_done provider=${pid} wall_ms=${Date.now() - providerWallMs} jobs=${jobs.length} new=${fresh.length} dup=${skipped} cross_dup=${skippedCrossProvider}${errPart}`,
       );
     }
 
     if (newJobsBuffer.length > 0) {
       jobsAdded = await appendDiscoveredJobs(newJobsBuffer);
     }
+    await dupeIndex.save().catch(() => {});
     await saveDiscoverySettings(settings);
     discoveryTerminalLog(`phase=storage jobs_appended_buffer=${newJobsBuffer.length} jobs_added=${jobsAdded}`);
 
@@ -161,9 +194,12 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
       phase: "queueing",
       message: "Prioritising jobs for deep analysis…",
       sessionLiveStats: { ...sess, newJobsAdded: newJobsBuffer.length },
+      step_started_at: new Date().toISOString(),
     });
 
     const evaluated = await loadEvaluatedJobIds();
+    const suppressed = await loadSuppressedJobIds();
+    for (const id of suppressed) evaluated.add(id);
     const tail = await loadDiscoveredJobsTail(600);
     const backlog = tail.filter((j) => opts.providers.includes(j.provider) && !evaluated.has(j.id));
     await mergeIntoEvalQueue(backlog, evaluated, heuristicBlob);
@@ -235,6 +271,7 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
       queue_remaining,
       errors,
       duplicates_skipped: duplicatesSkipped,
+      cross_provider_duplicates_skipped: crossProviderDuplicatesSkipped,
       failures_pending_retry: firstPass.failures_pending_retry,
       failures_permanent: firstPass.failures_permanent,
     };

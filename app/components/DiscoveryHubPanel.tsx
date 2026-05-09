@@ -2,12 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getKeywordsForSync, mergeApprovedPhraseIntoSearchKeywords } from "@/lib/discovery/keywordSync";
+import {
+  BTN_GHOST_AMBER_SM,
+  BTN_GHOST_ROSE_SM,
+  BTN_GHOST_SM,
+  BTN_GHOST_VIOLET_LG,
+  BTN_GHOST_VIOLET_SM,
+  BTN_PRIMARY_LG,
+  BTN_PRIMARY_MICRO,
+} from "@/lib/ui/dashboardButtons";
 import type {
   DiscoveryKeywordSuggestion,
   DiscoveryMatchRow,
   DiscoveryNonMatchRow,
   DiscoveryProgressState,
   DiscoveryProviderId,
+  DiscoverySalaryForecastSnapshot,
   DiscoverySettings,
 } from "@/types/discovery";
 
@@ -22,13 +32,13 @@ const PROVIDERS: { id: DiscoveryProviderId; label: string; hint: string }[] = [
   {
     id: "indeed",
     label: "Indeed (Hungary)",
-    hint: "Playwright search on hu.indeed.com (stealth-style pacing). Set ELIZA_DISCOVERY_PLAYWRIGHT=0 to fall back to RSS only.",
+    hint: "",
   },
-  { id: "linkedin", label: "LinkedIn (guest)", hint: "Public guest search + optional detail fetch." },
+  { id: "linkedin", label: "LinkedIn (guest)", hint: "" },
   {
     id: "profession",
     label: "Profession.hu",
-    hint: "Playwright listing + details (default: lite settle). Speed: ELIZA_PROFESSION_FAST_NAV=1, ELIZA_PROFESSION_LITE_SETTLE=0 (legacy), ELIZA_PROFESSION_DETAIL_VISITS=0–8, ELIZA_PROFESSION_FETCH_TIMEOUT_MS. Sync: ELIZA_DISCOVERY_SYNC_EVAL_BATCH, ELIZA_DISCOVERY_QUEUE_DRAIN_BATCH, ELIZA_DISCOVERY_MAX_SEED_PHRASES. ELIZA_DISCOVERY_PLAYWRIGHT=0 → HTTP only.",
+    hint: "",
   },
 ];
 
@@ -51,6 +61,32 @@ function discoveryProviderLabel(id: DiscoveryProviderId | undefined): string | n
   return PROVIDERS.find((x) => x.id === id)?.label ?? id;
 }
 
+function salaryForecastHeading(s: DiscoverySalaryForecastSnapshot): string {
+  const st =
+    s.match_status === "above_limit"
+      ? "Above your floor"
+      : s.match_status === "borderline"
+        ? "Borderline vs floor"
+        : "Below your floor";
+  const src = s.source === "posted" ? "posted range" : "market benchmark";
+  return `${st} (${src})`;
+}
+
+function SalaryForecastBlock({ s }: { s: DiscoverySalaryForecastSnapshot }) {
+  return (
+    <div className="text-xs mt-1.5 rounded border border-cyan-900/50 bg-cyan-950/25 px-2 py-1.5 space-y-0.5">
+      <p className="font-medium text-cyan-200/90">Salary forecast · {salaryForecastHeading(s)}</p>
+      <p className="text-slate-400 leading-snug">{s.rationale}</p>
+    </div>
+  );
+}
+
+function formatCompanyTitle(company: string | null | undefined, title: string): string {
+  const c = typeof company === "string" ? company.trim() : "";
+  if (!c) return title;
+  return `${c} - ${title}`;
+}
+
 function discoveryPhaseHeading(phase: DiscoveryProgressState["phase"]): string {
   switch (phase) {
     case "fetching":
@@ -64,6 +100,139 @@ function discoveryPhaseHeading(phase: DiscoveryProgressState["phase"]): string {
     default:
       return "Discovery";
   }
+}
+
+function parseIsoMs(iso: string | undefined): number | null {
+  if (!iso) return null;
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Human-readable duration for HU dashboard copy. */
+function formatDurationHu(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec} s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return `${m} p ${s} s`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h} ó ${rm} p`;
+}
+
+function discoveryPipelineRoadmapHu(p: DiscoveryProgressState): { step1of4: number; hint: string } {
+  const msg = (p.message ?? "").toLowerCase();
+  const awaitingDrain =
+    p.phase === "queueing" && (msg.includes("queued for deep") || msg.includes("background"));
+  if (p.phase === "fetching") {
+    return { step1of4: 1, hint: "Lista + részletek a kiválasztott forrásokból (Playwright / HTTP)." };
+  }
+  if (p.phase === "analyzing") {
+    return { step1of4: 3, hint: "Ollama: teljes Veto pipeline állásonként (parse, illeszkedés, bér-előrejelzés)." };
+  }
+  if (p.phase === "draining") {
+    return { step1of4: 4, hint: "A várólista következő tételei — kliens oldali drain körökben." };
+  }
+  if (awaitingDrain) {
+    return { step1of4: 4, hint: "A sync lekérő része kész; a sorban álló állások mély elemzése háttérben folyik." };
+  }
+  if (p.phase === "queueing") {
+    return { step1of4: 2, hint: "Állások sorba rendezése, várólista és katalógus összhang." };
+  }
+  return { step1of4: 0, hint: "" };
+}
+
+/** Rough ETA: last finished phrase duration × remaining phrases in this provider pass. */
+function discoveryFetchEtaMs(p: DiscoveryProgressState): number | null {
+  if (p.phase !== "fetching") return null;
+  const idx = p.fetchKeywordIndex;
+  const tot = p.fetchKeywordTotal;
+  const last = p.fetchPhraseDurationMs;
+  if (idx == null || tot == null || tot <= 0 || last == null || last <= 0) return null;
+  const remainingInPass = tot - idx + 1;
+  if (remainingInPass <= 0) return null;
+  return last * remainingInPass;
+}
+
+/** Rough ETA from average completed job time in this eval batch. */
+function discoveryEvalEtaMs(p: DiscoveryProgressState, nowMs: number): number | null {
+  if (p.phase !== "analyzing" && p.phase !== "draining") return null;
+  const idx = p.analysisIndex;
+  const tot = p.analysisTotal;
+  const batchStart = parseIsoMs(p.eval_batch_started_at);
+  if (idx == null || tot == null || tot <= 0 || batchStart == null) return null;
+  if (idx < 2) return null;
+  const elapsed = nowMs - batchStart;
+  const avgPerCompleted = elapsed / (idx - 1);
+  const jobsLeftInBatch = tot - idx + 1;
+  return avgPerCompleted * jobsLeftInBatch;
+}
+
+function DiscoveryPipelineTrace({ p, nowMs }: { p: DiscoveryProgressState; nowMs: number }) {
+  const runStart = parseIsoMs(p.pipeline_run_started_at);
+  const stepStart = parseIsoMs(p.step_started_at);
+  const runElapsed = runStart != null ? nowMs - runStart : null;
+  const stepElapsed = stepStart != null ? nowMs - stepStart : null;
+  const { step1of4, hint } = discoveryPipelineRoadmapHu(p);
+  const fetchEta = discoveryFetchEtaMs(p);
+  const evalEta = discoveryEvalEtaMs(p, nowMs);
+  const coarseEta = evalEta ?? fetchEta;
+  const roadmap = [
+    "Források lekérése",
+    "Sorba állítás & várólista",
+    "Mély elemzés (sync batch)",
+    "Mély elemzés (drain / háttér)",
+  ];
+  return (
+    <div className="rounded-md border border-slate-700/80 bg-slate-950/50 px-3 py-2.5 text-[11px] text-slate-200/95 space-y-2 leading-snug">
+      <p className="font-semibold text-amber-100/95 tracking-wide uppercase text-[10px]">Discovery pipeline</p>
+      <ol className="list-decimal list-inside space-y-0.5 text-slate-300/95">
+        {roadmap.map((label, i) => (
+          <li key={label} className={i + 1 === step1of4 ? "text-amber-100 font-medium" : ""}>
+            {label}
+            {i + 1 === step1of4 ? " · jelenleg itt" : ""}
+          </li>
+        ))}
+      </ol>
+      {hint ? <p className="text-slate-400/90">{hint}</p> : null}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 border-t border-slate-700/60 pt-2 tabular-nums">
+        <p>
+          <span className="text-slate-500">Eltelt (futás):</span>{" "}
+          <span className="text-slate-100">{runElapsed != null ? formatDurationHu(runElapsed) : "—"}</span>
+          <span className="text-slate-500"> · sync POST óta</span>
+        </p>
+        <p>
+          <span className="text-slate-500">Eltelt (aktuális rész-lépés):</span>{" "}
+          <span className="text-slate-100">{stepElapsed != null ? formatDurationHu(stepElapsed) : "—"}</span>
+        </p>
+        <p className="sm:col-span-2">
+          <span className="text-slate-500">Becsült hátra (durva, ebből a körből):</span>{" "}
+          <span className="text-amber-100/90">
+            {coarseEta != null ? formatDurationHu(coarseEta) : "még nincs elég minta (1–2 részlépés után)"}
+          </span>
+          <span className="text-slate-500">
+            {" "}
+            · elemzésnél: átlag × hátralévő állás a batchben; fetchnél: utolsó frázis idő × hátralévő seed
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function useDiscoveryProgressClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const kick = window.setTimeout(() => setNow(Date.now()), 0);
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      window.clearTimeout(kick);
+      window.clearInterval(id);
+    };
+  }, [active]);
+  return now;
 }
 
 type ProcessQueueResponse = {
@@ -176,15 +345,19 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   const [newMatchesTotal, setNewMatchesTotal] = useState(0);
   const [nonMatchesTotal, setNonMatchesTotal] = useState(0);
   const [previouslyFoundJobsTotal, setPreviouslyFoundJobsTotal] = useState(0);
-  const [busyProvider, setBusyProvider] = useState<DiscoveryProviderId | "all" | "auto" | null>(null);
+  const [busyProvider, setBusyProvider] = useState<DiscoveryProviderId | "all" | "auto" | "reevaluate" | null>(
+    null,
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [liveProgress, setLiveProgress] = useState<DiscoveryProgressState | null>(null);
+  const lastProgressFingerprintRef = useRef<string>("");
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [resetCatalogBusy, setResetCatalogBusy] = useState(false);
   const [resetMatchListsBusy, setResetMatchListsBusy] = useState(false);
   const syncInFlight = useRef(false);
   const intervalRef = useRef<number | null>(null);
-  const progressPollRef = useRef<number | null>(null);
+  /** Prevents overlapping auto-resume drains when progress still shows “continuing in the background…”. */
+  const drainResumeInFlightRef = useRef(false);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -315,26 +488,41 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     setMessage(null);
   };
 
-  const pollDiscoveryProgress = useCallback(() => {
-    if (progressPollRef.current != null) return;
-    progressPollRef.current = window.setInterval(async () => {
-      try {
-        const r = await fetch("/api/discovery/progress");
-        const p = (await r.json()) as DiscoveryProgressState;
-        setLiveProgress(p.phase === "idle" && !p.message ? null : p);
-      } catch {
-        /* ignore */
-      }
-    }, DISCOVERY_PROGRESS_POLL_MS);
-  }, []);
+  /** Reads `storage/discovery/progress.json` — must work even when this tab never called `runSync` (Strict remount, refresh mid-sync). */
+  const fetchDiscoveryProgress = useCallback(async () => {
+    try {
+      const r = await fetch("/api/discovery/progress");
+      const p = (await r.json()) as DiscoveryProgressState;
+      const idleLike = p.phase === "idle" && !(p.message && String(p.message).trim());
+      const next = idleLike ? null : p;
+      setLiveProgress(next);
 
-  const stopProgressPoll = useCallback(() => {
-    if (progressPollRef.current != null) {
-      window.clearInterval(progressPollRef.current);
-      progressPollRef.current = null;
+      // Refresh match lists automatically when progress indicates new evaluations.
+      // This avoids requiring a full page refresh during long-running sync/drain.
+      const fp = next?.sessionLiveStats
+        ? `${next.phase}|${next.sessionLiveStats.jobsEvaluated}|${next.sessionLiveStats.newHighMatches}|${next.sessionLiveStats.queueRemaining}`
+        : "";
+      if (fp && fp !== lastProgressFingerprintRef.current) {
+        lastProgressFingerprintRef.current = fp;
+        void loadMatches();
+      }
+    } catch {
+      /* ignore */
     }
-    setLiveProgress(null);
-  }, []);
+  }, [loadMatches]);
+
+  useEffect(() => {
+    const kick = window.setTimeout(() => {
+      void fetchDiscoveryProgress();
+    }, 0);
+    const id = window.setInterval(() => {
+      void fetchDiscoveryProgress();
+    }, DISCOVERY_PROGRESS_POLL_MS);
+    return () => {
+      window.clearTimeout(kick);
+      window.clearInterval(id);
+    };
+  }, [fetchDiscoveryProgress]);
 
   const runSync = useCallback(
     async (opts: { mode: "manual" | "auto"; provider?: DiscoveryProviderId | "all" }) => {
@@ -351,7 +539,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
       syncInFlight.current = true;
       setBusyProvider(opts.mode === "auto" ? "auto" : opts.provider ?? "all");
       setMessage(null);
-      pollDiscoveryProgress();
+      void fetchDiscoveryProgress();
       try {
         const res = await fetch("/api/discovery/sync", {
           method: "POST",
@@ -486,22 +674,200 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
       } catch {
         setMessage("Could not reach discovery sync API.");
       } finally {
-        stopProgressPoll();
         syncInFlight.current = false;
         setBusyProvider(null);
+        void fetchDiscoveryProgress();
       }
     },
-    [
-      cvLoaded,
-      selectedModel,
-      preferredLocation,
-      settings?.match_notify_threshold_percent,
-      loadSettings,
-      loadMatches,
-      pollDiscoveryProgress,
-      stopProgressPoll,
-    ],
+    [cvLoaded, selectedModel, preferredLocation, settings, loadSettings, loadMatches, fetchDiscoveryProgress],
   );
+
+  const runReevaluate = useCallback(async () => {
+    if (syncInFlight.current) {
+      setMessage("A discovery operation is already running.");
+      return;
+    }
+    if (!cvLoaded) {
+      setMessage("Upload and parse a CV on the Analysis tab before running AI reevaluate.");
+      return;
+    }
+    syncInFlight.current = true;
+    setBusyProvider("reevaluate");
+    setMessage(null);
+    void fetchDiscoveryProgress();
+    try {
+      const res = await fetch("/api/discovery/reevaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({
+          model: selectedModel,
+          preferred_location: preferredLocation.trim() || undefined,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        blocked?: string;
+        locked?: boolean;
+        awaiting_drain?: boolean;
+        jobs_considered?: number;
+        queued?: number;
+        jobs_evaluated?: number;
+        new_high_matches?: number;
+        queue_remaining?: number;
+        failures_pending_retry?: number;
+        failures_permanent?: number;
+        error?: string;
+      };
+
+      if (data.ok === false && data.blocked) {
+        setMessage(data.blocked);
+        return;
+      }
+      if ((res.status === 409 || data.locked) && data.awaiting_drain) {
+        setMessage("Finishing the evaluation queue from your previous run…");
+        const drain = await discoveryDrainEvalQueue({
+          model: selectedModel,
+          preferred_location: preferredLocation.trim() || undefined,
+          onRoundComplete: async () => {
+            await loadMatches();
+          },
+        });
+        await loadMatches();
+        if (!drain.ok) {
+          setMessage(`${drain.error} (${drain.remaining} job(s) still reported queued.)`);
+          return;
+        }
+        if (drain.stalled) {
+          setMessage(`${drain.remaining} job(s) still queued (drain safety limit). Try again shortly.`);
+          return;
+        }
+        setMessage("Evaluation queue cleared. Run AI reevaluate again when ready.");
+        return;
+      }
+      if (res.status === 409 || data.locked) {
+        setMessage("Another discovery operation is already running — try again shortly.");
+        return;
+      }
+      if (!res.ok) {
+        setMessage(data.error ?? "AI reevaluate failed.");
+        return;
+      }
+
+      let totalStrictWins = data.new_high_matches ?? 0;
+      let totalEvaluated = data.jobs_evaluated ?? 0;
+      let totalFailuresPendingRetry = data.failures_pending_retry ?? 0;
+      let totalFailuresPermanent = data.failures_permanent ?? 0;
+      let remaining = data.queue_remaining ?? 0;
+
+      if (remaining > 0) {
+        const drain = await discoveryDrainEvalQueue({
+          model: selectedModel,
+          preferred_location: preferredLocation.trim() || undefined,
+          onRoundComplete: async () => {
+            await loadMatches();
+          },
+        });
+        if (!drain.ok) {
+          setMessage(`AI reevaluate queued jobs, but queue drain failed: ${drain.error} (${drain.remaining} still queued).`);
+          return;
+        }
+        if (drain.stalled) {
+          setMessage(
+            `Queue drain stopped after ${DISCOVERY_DRAIN_MAX_ROUNDS} rounds with ${drain.remaining} job(s) left — run AI reevaluate again to continue.`,
+          );
+          return;
+        }
+        totalStrictWins += drain.totalStrictWins;
+        totalEvaluated += drain.totalPipelineSuccess;
+        totalFailuresPendingRetry += drain.totalFailuresPendingRetry;
+        totalFailuresPermanent += drain.totalFailuresPermanent;
+        remaining = drain.remaining;
+      }
+
+      await loadMatches();
+      const thr = settings?.match_notify_threshold_percent ?? 70;
+      const parts = [
+        `AI reevaluate queued ${data.queued ?? 0} job(s) (catalog: ${data.jobs_considered ?? 0}).`,
+        `Analyzed ${totalEvaluated} job(s) through the Veto pipeline.`,
+        `${totalStrictWins} passed the Veto Engine and scored ≥ ${thr}% (listed under New matches).`,
+      ];
+      if (totalFailuresPendingRetry > 0) {
+        parts.push(`${totalFailuresPendingRetry} failed and will retry next run.`);
+      }
+      if (totalFailuresPermanent > 0) {
+        parts.push(`${totalFailuresPermanent} failed permanently — check the dev server logs.`);
+      }
+      parts.push(remaining > 0 ? `${remaining} job(s) still queued for deep analysis.` : "Evaluation queue is empty.");
+      setMessage(parts.join(" "));
+    } catch {
+      setMessage("Could not reach AI reevaluate API.");
+    } finally {
+      syncInFlight.current = false;
+      setBusyProvider(null);
+      void fetchDiscoveryProgress();
+    }
+  }, [cvLoaded, fetchDiscoveryProgress, loadMatches, preferredLocation, selectedModel, settings]);
+
+  /** Stale disk progress after server restart: client never received runSync’s tail, so drain must start from the dashboard. */
+  const stalledDrainResumeKey = useMemo(() => {
+    if (!liveProgress) return "";
+    const msg = (liveProgress.message ?? "").toLowerCase();
+    const qRem = liveProgress.sessionLiveStats?.queueRemaining ?? 0;
+    if (liveProgress.phase !== "queueing" || qRem <= 0) return "";
+    if (!msg.includes("queued for deep") && !msg.includes("continuing in the background")) return "";
+    return "resume";
+  }, [liveProgress]);
+
+  useEffect(() => {
+    if (!settings || !cvLoaded || !stalledDrainResumeKey) return;
+    if (busyProvider != null || syncInFlight.current) return;
+    if (drainResumeInFlightRef.current) return;
+
+    drainResumeInFlightRef.current = true;
+    void (async () => {
+      try {
+        setMessage(
+          "Megszakadt vagy újraindult a session — folytatom a várólista mély elemzését (drain)…",
+        );
+        const drain = await discoveryDrainEvalQueue({
+          model: selectedModel,
+          preferred_location: preferredLocation.trim() || undefined,
+          onRoundComplete: async () => {
+            await loadMatches();
+          },
+        });
+        await loadMatches();
+        await fetchDiscoveryProgress();
+        if (!drain.ok) {
+          setMessage(drain.error);
+          return;
+        }
+        if (drain.remaining === 0) {
+          setMessage(
+            `Várólista kiürült (${drain.totalPipelineSuccess} pipeline futás, ${drain.totalStrictWins} erős találat).`,
+          );
+        } else if (drain.stalled) {
+          setMessage(
+            `${drain.remaining} állás még a sorban (drain körök limitje). Futtasd újra a manual syncet.`,
+          );
+        }
+      } catch (e) {
+        setMessage(e instanceof Error ? e.message : "A várólista folytatása sikertelen.");
+      } finally {
+        drainResumeInFlightRef.current = false;
+        void fetchDiscoveryProgress();
+      }
+    })();
+  }, [
+    stalledDrainResumeKey,
+    settings,
+    cvLoaded,
+    busyProvider,
+    selectedModel,
+    preferredLocation,
+    loadMatches,
+    fetchDiscoveryProgress,
+  ]);
 
   const anyAuto =
     Boolean(settings?.providers?.indeed?.auto) ||
@@ -518,6 +884,11 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     : !hasSyncKeywords
       ? "Add search keywords or approve suggestions before syncing."
       : undefined;
+
+  /** Server-authoritative: survives remount / tab switch while a sync POST still runs on the server. */
+  const serverProgressLive = liveProgress != null;
+  const clientAwaitingFirstProgressTick = busyProvider != null && !serverProgressLive;
+  const progressClockNow = useDiscoveryProgressClock(serverProgressLive);
 
   const approveSuggestion = (phrase: string) => {
     setSettings((prev) => {
@@ -572,7 +943,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
 
   return (
     <div className="space-y-6">
-      {busyProvider != null && liveProgress && liveProgress.phase !== "idle" ? (
+      {serverProgressLive && liveProgress ? (
         <div
           className="rounded-lg border border-blue-800/50 bg-blue-950/40 p-4 text-sm text-blue-100 space-y-3"
           aria-live="polite"
@@ -604,6 +975,8 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
               })()
             ) : null}
           </div>
+
+          <DiscoveryPipelineTrace p={liveProgress} nowMs={progressClockNow} />
 
           {liveProgress.phase === "fetching" &&
           liveProgress.fetchKeywordIndex != null &&
@@ -682,7 +1055,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             Updated {formatTime(liveProgress.updatedAt)}
           </p>
         </div>
-      ) : busyProvider != null ? (
+      ) : clientAwaitingFirstProgressTick ? (
         <div
           className="rounded-lg border border-slate-700 bg-slate-900/80 p-4 text-sm text-slate-400 space-y-2"
           aria-live="polite"
@@ -700,12 +1073,6 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         <p className="text-xs text-slate-500 tabular-nums">
           Previously found jobs catalog: {previouslyFoundJobsTotal.toLocaleString()} job
           {previouslyFoundJobsTotal === 1 ? "" : "s"} on disk.
-        </p>
-        <p className="text-[11px] text-slate-600">
-          Defaults favor shorter runs: smaller in-sync veto batch and queue drain (override via{" "}
-          <code className="text-slate-500">ELIZA_DISCOVERY_SYNC_EVAL_BATCH</code>,{" "}
-          <code className="text-slate-500">ELIZA_DISCOVERY_QUEUE_DRAIN_BATCH</code>,{" "}
-          <code className="text-slate-500">ELIZA_DISCOVERY_MAX_SEED_PHRASES</code> in the server env).
         </p>
         <div className="rounded-lg border border-amber-900/50 bg-amber-950/25 p-3 space-y-2">
           <p className="text-xs text-amber-100/95 leading-snug">
@@ -748,7 +1115,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                 setResetCatalogBusy(false);
               }
             }}
-            className="rounded-md border border-amber-700/80 bg-amber-950/60 px-3 py-2 text-xs font-medium text-amber-100 hover:bg-amber-900/50 disabled:opacity-40"
+            className={BTN_GHOST_AMBER_SM}
           >
             {resetCatalogBusy ? "Deleting…" : "Clear previously found jobs (duplicate reset)"}
           </button>
@@ -792,7 +1159,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                 setResetMatchListsBusy(false);
               }
             }}
-            className="rounded-md border border-rose-700/70 bg-rose-950/50 px-3 py-2 text-xs font-medium text-rose-100 hover:bg-rose-900/45 disabled:opacity-40"
+            className={BTN_GHOST_ROSE_SM}
           >
             {resetMatchListsBusy ? "Deleting…" : "Clear New matches and non-match lists"}
           </button>
@@ -846,10 +1213,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           </label>
         </div>
         <label className="block space-y-1">
-          <span className="text-xs text-slate-500">
-            Search keywords — comma-separated (always used on sync). Ollama is not run during sync; generate
-            suggestions below, then approve to append each phrase here (same as typing).
-          </span>
+          <span className="text-xs text-slate-500">Search keywords</span>
           <textarea
             rows={3}
             value={settings.search_keywords}
@@ -901,7 +1265,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                   setSuggestBusy(false);
                 }
               }}
-              className="rounded-md bg-violet-800 px-3 py-1.5 text-xs hover:bg-violet-700 disabled:opacity-40"
+              className={BTN_GHOST_VIOLET_SM}
             >
               {suggestBusy ? "Generating…" : "Generate suggestions"}
             </button>
@@ -925,14 +1289,14 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                     <span className="flex gap-1">
                       <button
                         type="button"
-                        className="rounded bg-emerald-900/80 px-2 py-0.5 text-[11px] hover:bg-emerald-800"
+                        className={BTN_PRIMARY_MICRO}
                         onClick={() => approveSuggestion(s.phrase)}
                       >
                         Approve
                       </button>
                       <button
                         type="button"
-                        className="rounded bg-slate-800 px-2 py-0.5 text-[11px] hover:bg-slate-700"
+                        className={`${BTN_GHOST_SM} px-2 py-0.5 text-[11px]`}
                         onClick={() => rejectSuggestion(s.phrase)}
                       >
                         Reject
@@ -955,13 +1319,10 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                   : `Permission: ${p}`,
               );
             }}
-            className="rounded-md bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
+            className={`${BTN_GHOST_SM} py-2`}
           >
             Enable browser notifications
           </button>
-          <span className="text-xs text-slate-500">
-            Notifications fire only for listings that pass the Veto Engine and meet your threshold (requires a CV).
-          </span>
         </div>
       </section>
 
@@ -974,7 +1335,9 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             <div key={id} className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3 flex flex-col">
               <div>
                 <h3 className="text-sm font-semibold text-slate-200">{label}</h3>
-                <p className="mt-1 text-[11px] text-slate-500 leading-snug">{hint}</p>
+                {hint.trim() ? (
+                  <p className="mt-1 text-[11px] text-slate-500 leading-snug">{hint}</p>
+                ) : null}
               </div>
               <div className="text-xs text-slate-400 space-y-1 flex-1">
                 <p>
@@ -1005,7 +1368,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                 disabled={syncDisabled}
                 title={syncBlockedTitle}
                 onClick={() => void runSync({ mode: "manual", provider: id })}
-                className="w-full rounded-md bg-emerald-700 px-3 py-2 text-sm hover:bg-emerald-600 disabled:opacity-40"
+                className={`${BTN_PRIMARY_LG} w-full`}
               >
                 {busy ? "Syncing…" : "Manual sync"}
               </button>
@@ -1044,9 +1407,21 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           disabled={busyProvider !== null || !canSync}
           title={syncBlockedTitle}
           onClick={() => void runSync({ mode: "manual", provider: "all" })}
-          className="rounded-md bg-blue-700 px-4 py-2 text-sm hover:bg-blue-600 disabled:opacity-40"
+          className={BTN_PRIMARY_LG}
         >
           {busyProvider === "all" ? "Syncing all…" : "Manual sync — all providers"}
+        </button>
+        <button
+          type="button"
+          disabled={busyProvider !== null || !canSync}
+          title={
+            syncBlockedTitle ??
+            "Re-evaluate previously discovered jobs using your current CV, constraints, and skill synonyms."
+          }
+          onClick={() => void runReevaluate()}
+          className={BTN_GHOST_VIOLET_LG}
+        >
+          {busyProvider === "reevaluate" ? "Reevaluating…" : "AI reevaluate"}
         </button>
       </div>
 
@@ -1058,7 +1433,8 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         </h2>
         <p className="text-xs text-slate-500">
           Jobs that passed your veto and scored at or above the threshold ({settings.match_notify_threshold_percent}%)
-          after automatic or manual sync.
+          after automatic or manual sync. Salary Oracle runs on the same pipeline; when present, a snapshot appears on
+          each row.
         </p>
         {matches.length === 0 ? (
           <p className="text-sm text-slate-500">No strong matches yet. Run a sync after uploading your CV.</p>
@@ -1067,7 +1443,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             {matches.map((m) => (
               <li key={`${m.job_id}-${m.evaluated_at}`} className="rounded-md border border-slate-700 p-3 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium text-slate-100">{m.title}</span>
+                  <span className="font-medium text-slate-100">{formatCompanyTitle(m.company, m.title)}</span>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-emerald-400 tabular-nums">{m.fit_score}%</span>
                     <button
@@ -1092,6 +1468,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                 {m.one_sentence_summary ? (
                   <p className="text-xs text-slate-400 mt-1">{m.one_sentence_summary}</p>
                 ) : null}
+                {m.salary_forecast ? <SalaryForecastBlock s={m.salary_forecast} /> : null}
                 <a
                   href={m.url}
                   target="_blank"
@@ -1112,7 +1489,9 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         </h2>
         <p className="text-xs text-slate-500">
           Jobs that completed the Veto pipeline but failed the veto and/or scored below your threshold (
-          {settings.match_notify_threshold_percent}%). Each row explains why it is not listed under New matches.
+          {settings.match_notify_threshold_percent}%). Each row explains why it is not listed under New matches. Salary
+          forecast from the same run is shown when available (informative; match vs threshold is still veto + fit
+          score).
         </p>
         {nonMatches.length === 0 ? (
           <p className="text-sm text-slate-500">
@@ -1123,7 +1502,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             {nonMatches.map((m) => (
               <li key={`${m.job_id}-${m.evaluated_at}`} className="rounded-md border border-slate-700 p-3 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium text-slate-100">{m.title}</span>
+                  <span className="font-medium text-slate-100">{formatCompanyTitle(m.company, m.title)}</span>
                   <div className="flex items-center gap-2 shrink-0">
                     <span
                       className={
@@ -1157,6 +1536,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                 {m.one_sentence_summary && m.one_sentence_summary !== m.not_match_reason ? (
                   <p className="text-xs text-slate-400 mt-1">{m.one_sentence_summary}</p>
                 ) : null}
+                {m.salary_forecast ? <SalaryForecastBlock s={m.salary_forecast} /> : null}
                 <a
                   href={m.url}
                   target="_blank"

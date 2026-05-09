@@ -11,4 +11,6 @@ export const DISCOVERY_NON_MATCHES_PATH = path.join(DISCOVERY_DIR, "non_matches.
 export const DISCOVERY_PROGRESS_PATH = path.join(DISCOVERY_DIR, "progress.json");
 export const DISCOVERY_EVAL_QUEUE_PATH = path.join(DISCOVERY_DIR, "eval_queue.json");
 export const DISCOVERY_EVAL_FAILURES_PATH = path.join(DISCOVERY_DIR, "eval_failures.json");
+export const DISCOVERY_SUPPRESSED_IDS_PATH = path.join(DISCOVERY_DIR, "suppressed_ids.json");
+export const DISCOVERY_DUPE_INDEX_PATH = path.join(DISCOVERY_DIR, "dupe_index.json");
 export const DISCOVERY_DEBUG_DIR = path.join(STORAGE, "debug");

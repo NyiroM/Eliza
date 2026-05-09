@@ -118,7 +118,7 @@ export default function JobInputHighlighter({
         Edit normally. Hover highlighted phrases to inspect semantic rationale.
       </p>
 
-      <div className="relative rounded-md border border-slate-700 bg-slate-950">
+      <div className="relative rounded-md border border-slate-700 bg-slate-950 transition-[box-shadow,border-color] focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/20">
         <div
           ref={mirrorScrollRef}
           aria-hidden

@@ -8,8 +8,8 @@ const CONSTRAINT_TACTICS_PATH = path.join(STORAGE_DIR, "constraint_tactics.json"
 /** Constraint clash families for veto vs soft scoring. */
 export type ConstraintTacticDomain = "location" | "remote_zone" | "compensation";
 
-/** default: normal veto rules; never_veto / soft_only: do not hard-veto for that family (use constraint_delta only). */
-export type VetoStance = "default" | "never_veto" | "soft_only";
+/** default: normal veto rules; strong_preference: never hard-veto for that family (use a large negative constraint_delta). */
+export type VetoStance = "default" | "strong_preference";
 
 export type StoredConstraintTactics = {
   tactics: Partial<Record<ConstraintTacticDomain, VetoStance>>;
@@ -24,7 +24,9 @@ const EMPTY: StoredConstraintTactics = {
 const DOMAINS: ConstraintTacticDomain[] = ["location", "remote_zone", "compensation"];
 
 function normalizeStance(v: unknown): VetoStance {
-  if (v === "never_veto" || v === "soft_only" || v === "default") return v;
+  // Back-compat: older persisted values
+  if (v === "never_veto" || v === "soft_only") return "strong_preference";
+  if (v === "strong_preference" || v === "default") return v;
   return "default";
 }
 
