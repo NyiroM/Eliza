@@ -116,6 +116,13 @@ export const DISCOVERY_FAILURE_COOLDOWN_MS = Number.isFinite(_failCooldown)
   ? Math.max(0, _failCooldown)
   : 30 * 60 * 1000;
 
+/**
+ * How many trailing `jobs.jsonl` rows sync uses when merging the evaluation backlog.
+ * Keep aligned with the default reevaluate catalog window (`loadDiscoveredJobsAll`) so older
+ * unevaluated rows are not invisible to sync-only queueing.
+ */
+export const DISCOVERY_SYNC_BACKLOG_MAX_JOBS = 5000;
+
 /** `ollama list` subprocess timeout (ms). */
 export const OLLAMA_LIST_TIMEOUT_MS = 20_000;
 

@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.28] — 2026-05-09
+
+### Fixed
+
+- **Catalog reset** — `reset-catalog` now clears **`dupe_index.json`** as well. Previously, fingerprints for deleted catalog rows could still mark genuinely new listings as cross-provider duplicates, so they were skipped on sync.
+- **Sync backlog window** — Sync queue merge now scans the same trailing catalog size as reevaluate (**`DISCOVERY_SYNC_BACKLOG_MAX_JOBS`**, default 5000) instead of only 600 lines, so older unevaluated rows in a large `jobs.jsonl` are no longer invisible to sync-only queueing.
+- **Retry queue** — `returnToEvalQueue` no longer re-inserts user-suppressed listings after a pipeline failure.
+
+### Changed
+
+- **`loadDiscoveredJobsAll`** default line cap follows **`DISCOVERY_SYNC_BACKLOG_MAX_JOBS`** (single source of truth).
+- **Dupe-index warm** on empty index now loads the same trailing window as the sync backlog (not 1400 lines).
+
 ## [0.4.27] — 2026-05-09
 
 ### Fixed
@@ -91,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
+[0.4.28]: https://github.com/NyiroM/Eliza/compare/v0.4.27...v0.4.28
 [0.4.27]: https://github.com/NyiroM/Eliza/compare/v0.4.26...v0.4.27
 [0.4.26]: https://github.com/NyiroM/Eliza/compare/v0.4.25...v0.4.26
 [0.4.25]: https://github.com/NyiroM/Eliza/compare/v0.4.24...v0.4.25

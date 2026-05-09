@@ -3,6 +3,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import {
   DISCOVERY_DIR,
+  DISCOVERY_DUPE_INDEX_PATH,
   DISCOVERY_EVAL_FAILURES_PATH,
   DISCOVERY_EVAL_QUEUE_PATH,
   DISCOVERY_EVALUATED_IDS_PATH,
@@ -16,16 +17,26 @@ export type ResetDiscoveryCatalogResult = {
     evaluated_ids: boolean;
     eval_queue: boolean;
     eval_failures: boolean;
+    dupe_index: boolean;
   };
 };
 
-/** Truncate jobs.jsonl and reset evaluated ids, eval queue, and eval failure store. */
+/** Truncate jobs.jsonl and reset evaluated ids, eval queue, eval failure store, and cross-provider dupe index. */
 export async function resetDiscoveryCatalogForDuplicateFilter(): Promise<ResetDiscoveryCatalogResult> {
   await mkdir(DISCOVERY_DIR, { recursive: true });
   await writeFile(DISCOVERY_JOBS_PATH, "", "utf-8");
   await writeFile(DISCOVERY_EVALUATED_IDS_PATH, JSON.stringify([], null, 2), "utf-8");
   await writeFile(DISCOVERY_EVAL_QUEUE_PATH, JSON.stringify({ items: [] }, null, 2), "utf-8");
   await writeFile(DISCOVERY_EVAL_FAILURES_PATH, JSON.stringify({ items: [] }, null, 2), "utf-8");
+  await writeFile(
+    DISCOVERY_DUPE_INDEX_PATH,
+    JSON.stringify(
+      { version: 1, updated_at: new Date().toISOString(), buckets: {} } as const,
+      null,
+      2,
+    ),
+    "utf-8",
+  );
   return {
     ok: true,
     cleared: {
@@ -33,6 +44,7 @@ export async function resetDiscoveryCatalogForDuplicateFilter(): Promise<ResetDi
       evaluated_ids: true,
       eval_queue: true,
       eval_failures: true,
+      dupe_index: true,
     },
   };
 }

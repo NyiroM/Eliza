@@ -19,7 +19,11 @@ import { processEvalQueue } from "../../../../lib/discovery/processEvalQueue";
 import { resolveOllamaModel } from "../../../../lib/storage/resolveOllamaModel";
 import { hasStoredCv } from "../../../../lib/storage/userCv";
 import { validateOllamaModelTag, validatePreferredLocationField } from "../../../../lib/validation";
-import { DEFAULT_OLLAMA_MODEL, DISCOVERY_SYNC_EVAL_BATCH } from "../../../../config/constants";
+import {
+  DEFAULT_OLLAMA_MODEL,
+  DISCOVERY_SYNC_BACKLOG_MAX_JOBS,
+  DISCOVERY_SYNC_EVAL_BATCH,
+} from "../../../../config/constants";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -85,7 +89,7 @@ export async function POST(request: NextRequest) {
   }
   const preferred_location = ploc.preferred_location;
 
-  let maxJobs = 5000;
+  let maxJobs = DISCOVERY_SYNC_BACKLOG_MAX_JOBS;
   if (typeof body.max_jobs === "number" && Number.isFinite(body.max_jobs)) {
     maxJobs = Math.min(20000, Math.max(50, Math.round(body.max_jobs)));
   }

@@ -1078,8 +1078,9 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           <p className="text-xs text-amber-100/95 leading-snug">
             <span className="font-medium">Previously found jobs / duplicate-filter reset:</span> deletes the{" "}
             <code className="text-amber-200/90">jobs.jsonl</code> catalog, the <code className="text-amber-200/90">evaluated_ids</code>{" "}
-            list, the evaluation queue, and the failed-attempt log. The next sync may pick up and process the same listings
-            again. <strong>New matches</strong> / non-match lists are <strong>not</strong> cleared.
+            list, the evaluation queue, the failed-attempt log, and the <code className="text-amber-200/90">dupe_index</code>{" "}
+            cross-provider fingerprint store (so stale fingerprints cannot hide new listings). The next sync may pick up and
+            process the same listings again. <strong>New matches</strong> / non-match lists are <strong>not</strong> cleared.
           </p>
           <button
             type="button"
@@ -1087,7 +1088,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             onClick={async () => {
               if (
                 !window.confirm(
-                  "Delete the previously found jobs catalog and related pipeline state (evaluated IDs, queue, failure log)? The next sync may process these listings again.",
+                  "Delete the previously found jobs catalog and related pipeline state (evaluated IDs, queue, failure log, dupe index)? The next sync may process these listings again.",
                 )
               ) {
                 return;

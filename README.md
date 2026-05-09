@@ -162,7 +162,7 @@ On a typical **16 GB VRAM** workstation with **`deepseek-r1:8b`** pulled in Olla
 | `lib/cv/`, `lib/benchmark/`, `lib/logging/` | CV helpers, optional stress benchmarks, structured logs |
 | `scripts/` | Verification and tuning scripts (`*.mts`) |
 | `types/` | Shared contracts (`PipelineOutput`, `discovery`, …) |
-| `config/constants.ts` | Central limits, timeouts, default model tag |
+| `config/constants.ts` | Central limits, timeouts, default model tag; discovery backlog cap `DISCOVERY_SYNC_BACKLOG_MAX_JOBS` |
 | `apps/extension/` | Chrome extension (`npm run build` → `dist/`) |
 | `benchmarks/` | Default output directory for `npm run benchmark:ollama-tuning` (artifacts gitignored) |
 

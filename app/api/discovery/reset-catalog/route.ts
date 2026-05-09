@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" } as const;
 
-/** POST — clears jobs.jsonl, evaluated_ids, eval queue, and eval failures (manual duplicate-filter reset). */
+/** POST — clears jobs.jsonl, evaluated_ids, eval queue, eval failures, and dupe_index (manual duplicate-filter reset). */
 export async function POST() {
   try {
     const result = await withDiscoverySyncLock(async () => {

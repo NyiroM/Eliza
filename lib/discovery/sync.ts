@@ -1,5 +1,9 @@
 // lib/discovery/sync.ts
-import { DEFAULT_OLLAMA_MODEL, DISCOVERY_SYNC_EVAL_BATCH } from "../../config/constants";
+import {
+  DEFAULT_OLLAMA_MODEL,
+  DISCOVERY_SYNC_BACKLOG_MAX_JOBS,
+  DISCOVERY_SYNC_EVAL_BATCH,
+} from "../../config/constants";
 import type { DiscoveredJob, DiscoveryProviderId, DiscoverySyncResult } from "../../types/discovery";
 import { appendDiscoveredJobs, loadDiscoveredJobIds, loadDiscoveredJobsTail } from "./jobStore";
 import { getKeywordsForSync } from "./keywordSync";
@@ -53,7 +57,7 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
   try {
     // Warm the dupe index from recent catalog rows (cheap, helps cross-provider dedupe immediately).
     if (existing.size > 0 && dupeIndex.count() === 0) {
-      const tail = await loadDiscoveredJobsTail(1400);
+      const tail = await loadDiscoveredJobsTail(DISCOVERY_SYNC_BACKLOG_MAX_JOBS);
       for (const j of tail) {
         dupeIndex.recordJob(j);
       }
@@ -200,7 +204,7 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
     const evaluated = await loadEvaluatedJobIds();
     const suppressedFilter = await loadSuppressedFilter();
     for (const id of suppressedFilter.ids) evaluated.add(id);
-    const tail = await loadDiscoveredJobsTail(600);
+    const tail = await loadDiscoveredJobsTail(DISCOVERY_SYNC_BACKLOG_MAX_JOBS);
     const backlog = tail.filter(
       (j) =>
         opts.providers.includes(j.provider) &&

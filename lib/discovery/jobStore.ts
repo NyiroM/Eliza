@@ -1,5 +1,6 @@
 // lib/discovery/jobStore.ts
 import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { DISCOVERY_SYNC_BACKLOG_MAX_JOBS } from "../../config/constants";
 import type { DiscoveredJob } from "../../types/discovery";
 import { DISCOVERY_DIR, DISCOVERY_JOBS_PATH } from "./paths";
 
@@ -67,7 +68,7 @@ export async function loadDiscoveredJobsTail(maxLines = 400): Promise<Discovered
 }
 
 /** Parse up to `maxLines` jobs from jobs.jsonl (oldest → newest). */
-export async function loadDiscoveredJobsAll(maxLines = 5000): Promise<DiscoveredJob[]> {
+export async function loadDiscoveredJobsAll(maxLines = DISCOVERY_SYNC_BACKLOG_MAX_JOBS): Promise<DiscoveredJob[]> {
   try {
     const raw = await readFile(DISCOVERY_JOBS_PATH, "utf-8");
     const lines = raw.split("\n").filter((l) => l.trim());

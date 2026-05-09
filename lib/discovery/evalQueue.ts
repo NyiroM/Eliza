@@ -161,9 +161,12 @@ export async function takeFromEvalQueue(
 /** Re-append items to the front of the queue (e.g. after failed pipeline without marking evaluated). */
 export async function returnToEvalQueue(jobs: QueuedEvalJob[]): Promise<void> {
   if (jobs.length === 0) return;
+  const suppressedFilter = await loadSuppressedFilter();
+  const allowed = jobs.filter((j) => !isSuppressedDiscoveredJob(j, suppressedFilter));
+  if (allowed.length === 0) return;
   const cur = await loadQueueFile();
   const byId = new Map<string, QueuedEvalJob>();
-  for (const q of jobs) byId.set(q.id, q);
+  for (const q of allowed) byId.set(q.id, q);
   for (const q of cur) {
     if (!byId.has(q.id)) byId.set(q.id, q);
   }
