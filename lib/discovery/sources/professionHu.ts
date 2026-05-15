@@ -1,6 +1,8 @@
 // lib/discovery/sources/professionHu.ts
 import * as cheerio from "cheerio";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discovery";
+import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
+import { professionHuLocationSlugFromPreference } from "../professionHuUrlValidation";
 import { stableJobId } from "../id";
 
 const UA =
@@ -10,10 +12,16 @@ const UA =
  * Best-effort HTML scrape of profession.hu listing (no Playwright).
  * If the page is mostly client-rendered, this may return few rows; users can rely on Indeed/LinkedIn or extend with Playwright later.
  */
-export async function fetchProfessionHuJobs(keywords: string, maxItems = 20): Promise<DiscoveredJob[]> {
+export async function fetchProfessionHuJobs(
+  keywords: string,
+  maxItems = 20,
+  preferredLocation?: string | null,
+): Promise<DiscoveredJob[]> {
   const raw = (keywords.trim() || "fejlesztő").trim();
-  const listUrl = `https://www.profession.hu/allasok?adv_pattern=${encodeURIComponent(raw)}`;
-  const res = await fetch(listUrl, {
+  const slug = professionHuLocationSlugFromPreference(preferredLocation);
+  const path = slug ? `/allasok/${slug}` : "/allasok";
+  const listUrl = `https://www.profession.hu${path}?adv_pattern=${encodeURIComponent(raw)}`;
+  const res = await timedDiscoveryFetch(listUrl, {
     headers: {
       "User-Agent": UA,
       Accept: "text/html,application/xhtml+xml",
@@ -23,7 +31,7 @@ export async function fetchProfessionHuJobs(keywords: string, maxItems = 20): Pr
   if (!res.ok) {
     throw new Error(`Profession.hu list HTTP ${res.status}`);
   }
-  const html = await res.text();
+  const html = await readDiscoveryResponseText(res);
   const $ = cheerio.load(html);
   const provider: DiscoveryProviderId = "profession";
   const out: DiscoveredJob[] = [];

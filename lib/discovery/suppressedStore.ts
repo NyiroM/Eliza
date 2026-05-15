@@ -2,7 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { DiscoveredJob } from "../../types/discovery";
 import { canonicalizeJobUrl } from "./id";
-import { DISCOVERY_DIR, DISCOVERY_SUPPRESSED_IDS_PATH } from "./paths";
+import { getDiscoveryDir, getDiscoverySuppressedIdsPath } from "./paths";
 
 type SuppressedFile = { ids: string[]; canonical_urls?: string[] };
 
@@ -13,7 +13,7 @@ export type SuppressedFilter = {
 
 async function readSuppressedFile(): Promise<SuppressedFile> {
   try {
-    const raw = await readFile(DISCOVERY_SUPPRESSED_IDS_PATH, "utf-8");
+    const raw = await readFile(getDiscoverySuppressedIdsPath(), "utf-8");
     const parsed = JSON.parse(raw) as SuppressedFile;
     const ids = Array.isArray(parsed.ids) ? parsed.ids : [];
     const canonical_urls = Array.isArray(parsed.canonical_urls) ? parsed.canonical_urls : [];
@@ -69,12 +69,12 @@ export async function addSuppressedListing(job: { id: string; provider: string; 
     const c = canonicalizeJobUrl(prov, rawUrl).trim();
     if (c) urls.add(c);
   }
-  await mkdir(DISCOVERY_DIR, { recursive: true });
+  await mkdir(getDiscoveryDir(), { recursive: true });
   const payload: SuppressedFile = {
     ids: [...ids].sort(),
     canonical_urls: urls.size > 0 ? [...urls].sort() : [],
   };
-  await writeFile(DISCOVERY_SUPPRESSED_IDS_PATH, JSON.stringify(payload, null, 2), "utf-8");
+  await writeFile(getDiscoverySuppressedIdsPath(), JSON.stringify(payload, null, 2), "utf-8");
 }
 
 export async function addSuppressedJobId(jobId: string): Promise<void> {

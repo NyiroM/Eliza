@@ -5,6 +5,7 @@ import type { Element } from "domhandler";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discovery";
 import { saveDiscoveryZeroResultScreenshot } from "../debugScreenshot";
 import { stableJobId } from "../id";
+import { indeedLocationParamFromPreference } from "../locationPreferenceShared";
 import { resolveIndeedJobUrl } from "./indeedJobUrl";
 import {
   humanPause,
@@ -39,9 +40,10 @@ async function dismissIndeedCookies(page: Page): Promise<void> {
   }
 }
 
-function indeedSearchUrl(keywords: string): string {
+function indeedSearchUrl(keywords: string, preferredLocation?: string | null): string {
   const q = keywords.trim() || "developer";
-  return `https://hu.indeed.com/jobs?q=${encodeURIComponent(q)}&l=Hungary`;
+  const l = indeedLocationParamFromPreference(preferredLocation);
+  return `https://hu.indeed.com/jobs?q=${encodeURIComponent(q)}&l=${encodeURIComponent(l)}`;
 }
 
 const JOB_CARD_LINK_SELECTORS = [
@@ -52,8 +54,12 @@ const JOB_CARD_LINK_SELECTORS = [
 /**
  * Fetches job cards from Indeed Hungary using Playwright with light stealth patterns.
  */
-export async function fetchIndeedJobsPlaywright(keywords: string, maxItems = 25): Promise<DiscoveredJob[]> {
-  const listUrl = indeedSearchUrl(keywords);
+export async function fetchIndeedJobsPlaywright(
+  keywords: string,
+  maxItems = 25,
+  preferredLocation?: string | null,
+): Promise<DiscoveredJob[]> {
+  const listUrl = indeedSearchUrl(keywords, preferredLocation);
   const launchOpts: Parameters<typeof chromium.launch>[0] = {
     headless: true,
     args: STEALTH_CHROMIUM_ARGS,

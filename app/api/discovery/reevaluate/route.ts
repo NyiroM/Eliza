@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import { getEvalQueueLength, mergeIntoEvalQueue, pruneEvalQueue, clearEvalQueue } from "../../../../lib/discovery/evalQueue";
 import {
   isDiscoverySessionBlockingSync,
@@ -37,6 +38,7 @@ type Body = {
 };
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: Body;
   try {
     body = (await request.json()) as Body;
@@ -189,5 +191,6 @@ export async function POST(request: NextRequest) {
     console.error("[discovery/reevaluate]", msg);
     return NextResponse.json({ ok: false, error: msg }, { status: 500, headers: NO_STORE });
   }
+  });
 }
 

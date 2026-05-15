@@ -1,8 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { requireUserRoot } from "./activeUserContext";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage");
-const USER_CONSTRAINTS_PATH = path.join(STORAGE_DIR, "user_constraints.json");
+function userConstraintsPath(): string {
+  return path.join(requireUserRoot(), "user_constraints.json");
+}
 
 export type StoredUserConstraints = {
   constraints: string[];
@@ -16,7 +18,7 @@ const EMPTY_CONSTRAINTS: StoredUserConstraints = {
 
 export async function loadUserConstraintsFromStorage(): Promise<StoredUserConstraints> {
   try {
-    const content = await readFile(USER_CONSTRAINTS_PATH, "utf-8");
+    const content = await readFile(userConstraintsPath(), "utf-8");
     const parsed = JSON.parse(content) as Partial<StoredUserConstraints>;
     return {
       constraints: Array.isArray(parsed.constraints)
@@ -35,8 +37,9 @@ export async function loadUserConstraintsFromStorage(): Promise<StoredUserConstr
 export async function saveUserConstraintsToStorage(
   data: StoredUserConstraints,
 ): Promise<void> {
-  await mkdir(STORAGE_DIR, { recursive: true });
-  await writeFile(USER_CONSTRAINTS_PATH, JSON.stringify(data, null, 2), "utf-8");
+  const p = userConstraintsPath();
+  await mkdir(path.dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(data, null, 2), "utf-8");
 }
 
 export async function addUserConstraint(constraint: string): Promise<StoredUserConstraints> {

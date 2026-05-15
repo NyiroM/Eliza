@@ -1,6 +1,6 @@
 // lib/discovery/processEvalQueue.ts
 import type { DiscoveryProviderId, DiscoverySalaryForecastSnapshot } from "../../types/discovery";
-import type { JobSourceKind, PipelineOutput, SalaryAnalysis } from "../../types/pipeline";
+import type { JobSourceKind, PipelineOutput, SalaryAnalysis, SalaryForecastDisplay } from "../../types/pipeline";
 import { DEFAULT_OLLAMA_MODEL, DISCOVERY_FAILURE_MAX_ATTEMPTS } from "../../config/constants";
 import { runPipelineDetailed } from "../pipeline";
 import { addEvaluatedJobIds, loadEvaluatedJobIds } from "./evaluatedStore";
@@ -16,15 +16,59 @@ import {
   returnToEvalQueue,
   takeFromEvalQueue,
 } from "./evalQueue";
-import { progressAnalyzing, progressDraining } from "./progress";
+import {
+  bumpDiscoveryProgressClock,
+  clearDiscoveryProgress,
+  defaultSessionLiveStats,
+  type EvalQueueProgressMeta,
+  progressAnalyzing,
+  progressDraining,
+  readDiscoveryProgress,
+  setDiscoveryProgress,
+} from "./progress";
 import { loadSuppressedFilter } from "./suppressedStore";
+
+// Discovery card rationale: kept long enough for "Hays 2026 …  +X% hot-skills … heat very_hot
+// … synthetic estimate (diag) Refined: …" without truncation; trimmed cleanly at the last
+// sentence/word boundary so we never break mid-token.
+const SALARY_FORECAST_SNAPSHOT_MAX = 360;
+
+function truncateRationale(raw: string, limit: number): string {
+  const s = raw.trim();
+  if (s.length <= limit) return s;
+  const cut = s.slice(0, limit);
+  const lastBoundary = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf(' · '), cut.lastIndexOf(') '));
+  if (lastBoundary > limit * 0.6) return `${cut.slice(0, lastBoundary + 1).trim()}…`;
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim()}…`;
+}
+
+function truncateSalaryDisplay(d: SalaryForecastDisplay): SalaryForecastDisplay {
+  return {
+    estimate_headline: truncateRationale(d.estimate_headline, 240),
+    low_confidence: d.low_confidence,
+    source_from_posting: d.source_from_posting,
+    benchmark_basis: d.benchmark_basis
+      ? {
+          discipline: d.benchmark_basis.discipline
+            ? truncateRationale(d.benchmark_basis.discipline, 80)
+            : null,
+          seniority: truncateRationale(d.benchmark_basis.seniority, 36),
+          position: truncateRationale(d.benchmark_basis.position, 140),
+        }
+      : null,
+    floor_comparison: truncateRationale(d.floor_comparison, 260),
+    supplement: d.supplement ? truncateRationale(d.supplement, SALARY_FORECAST_SNAPSHOT_MAX) : undefined,
+  };
+}
 
 function salaryForecastSnapshot(s: SalaryAnalysis | null | undefined): DiscoverySalaryForecastSnapshot | undefined {
   if (!s) return undefined;
   return {
     match_status: s.match_status,
     source: s.source,
-    rationale: s.rationale.trim().slice(0, 240),
+    rationale: truncateRationale(s.rationale, SALARY_FORECAST_SNAPSHOT_MAX),
+    display: s.salary_forecast_display ? truncateSalaryDisplay(s.salary_forecast_display) : undefined,
   };
 }
 
@@ -32,6 +76,15 @@ function jobSourceForProvider(p: DiscoveryProviderId): JobSourceKind {
   if (p === "indeed") return "discovery_indeed";
   if (p === "linkedin") return "discovery_linkedin";
   return "discovery_profession";
+}
+
+function vetoHeadlineFromPipelineOutput(r: PipelineOutput): string | null {
+  const summary = (r.summary ?? "").trim();
+  const fromSummary = summary.match(/^VETO:\s*([\s\S]+?)(?:\n\n|$)/)?.[1]?.trim();
+  if (fromSummary) return fromSummary;
+  const line = (r.one_sentence_summary ?? "").trim();
+  if (!line) return null;
+  return line.replace(/^veto(ed)?:\s*/i, "").trim() || line;
 }
 
 /** User-facing line(s) for storage and Dashboard (non-match list). */
@@ -42,9 +95,10 @@ function buildNotMatchReason(r: PipelineOutput, threshold: number): string {
 
   const parts: string[] = [];
   if (vetoed) {
-    const line = (r.one_sentence_summary ?? r.summary ?? "").trim();
-    if (line) parts.push(`Veto: ${line}`);
-    else parts.push("Did not pass the veto (hard constraints or listing marked Vetoed).");
+    const headline = vetoHeadlineFromPipelineOutput(r);
+    if (headline) {
+      parts.push(/^(rejected|veto)/i.test(headline) ? headline : `Veto: ${headline}`);
+    } else parts.push("Did not pass the veto (hard constraints or listing marked Vetoed).");
   }
   if (below && !vetoed) {
     if (score === null) parts.push("No numeric fit score reached your match threshold.");
@@ -87,6 +141,20 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   const evaluated = await loadEvaluatedJobIds();
   const suppressedFilter = await loadSuppressedFilter();
   for (const id of suppressedFilter.ids) evaluated.add(id);
+  const prevForWave = await readDiscoveryProgress();
+  const sWave = prevForWave.sessionLiveStats ?? defaultSessionLiveStats();
+  const queueBeforeTake = await getEvalQueueLength();
+  const batchBaseJobs = sWave.jobsEvaluated;
+  const grandFromPrev =
+    typeof prevForWave.evalSessionGrandTotal === "number" && prevForWave.evalSessionGrandTotal > 0
+      ? prevForWave.evalSessionGrandTotal
+      : batchBaseJobs + queueBeforeTake;
+  const evalSessionGrandTotal = Math.max(1, grandFromPrev);
+  const queueMeta: EvalQueueProgressMeta = {
+    evalSessionGrandTotal,
+    evalBatchBaseJobsEvaluated: batchBaseJobs,
+  };
+
   const batch = await takeFromEvalQueue(opts.maxItems, evaluated, suppressedFilter);
 
   let newHighMatches = 0;
@@ -108,14 +176,18 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
     const idx = i + 1;
     const msg = `Analyzing job ${idx}/${total} (${job.provider}) — ${job.title.slice(0, 48)}${job.title.length > 48 ? "…" : ""}`;
     if (opts.draining) {
-      await progressDraining(idx, total, msg);
+      await progressDraining(idx, total, msg, queueMeta);
     } else {
-      await progressAnalyzing(idx, total, msg);
+      await progressAnalyzing(idx, total, msg, queueMeta);
     }
     if (discoveryEvalQuarterIndex(idx, total)) {
       discoveryTerminalLog(`phase=eval_progress mode=${phase} job=${idx}/${total} provider=${job.provider}`);
     }
 
+    const progressHeartbeatMs = 45_000;
+    const heartbeat = setInterval(() => {
+      void bumpDiscoveryProgressClock();
+    }, progressHeartbeatMs);
     try {
       const jobText = await buildJobTextForPipeline(job);
       const detailed = await runPipelineDetailed({
@@ -180,6 +252,8 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
         await returnToEvalQueue([job]);
         failuresPendingRetry += 1;
       }
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
@@ -192,6 +266,36 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
     getEvalQueueLength(),
     getEvalQueueActionableLength(),
   ]);
+
+  // Always finalize progress at the end of a batch — otherwise the last "Analyzing N/N" line
+  // sticks on disk forever, which both confuses the dashboard ("looks frozen") and prevents
+  // the client-side auto-resume from firing after a restart (it only triggers on phase="queueing").
+  if (queue_remaining === 0) {
+    await clearDiscoveryProgress().catch(() => {});
+  } else if (actionable_remaining === 0) {
+    // Queue has rows but they are all in failure cooldown — drain is genuinely waiting.
+    const prev = await readDiscoveryProgress();
+    const s = prev.sessionLiveStats ?? defaultSessionLiveStats();
+    await setDiscoveryProgress({
+      phase: "queueing",
+      message: `${queue_remaining} job(s) remain in the eval queue but are in pipeline failure retry cooldown — nothing runs until the cooldown window passes. Use drain again later or check Ollama logs.`,
+      sessionLiveStats: { ...s, queueRemaining: queue_remaining },
+      step_started_at: new Date().toISOString(),
+    });
+  } else if (total > 0) {
+    // Batch finished, more actionable rows remain — flip back to the "awaiting drain"
+    // message so the client auto-resume can pick up if this round was the last one or
+    // if the server is killed between drain rounds.
+    const prev = await readDiscoveryProgress();
+    const s = prev.sessionLiveStats ?? defaultSessionLiveStats();
+    await setDiscoveryProgress({
+      phase: "queueing",
+      message: `${queue_remaining} job(s) queued for deep analysis — continuing in the background…`,
+      sessionLiveStats: { ...s, queueRemaining: queue_remaining },
+      step_started_at: new Date().toISOString(),
+    });
+  }
+
   discoveryTerminalLog(
     `phase=eval_batch_done mode=${phase} evaluated=${processed} high_matches=${newHighMatches} queue_remaining=${queue_remaining} actionable=${actionable_remaining} retry=${failuresPendingRetry} permanent_fail=${failuresPermanent}`,
   );

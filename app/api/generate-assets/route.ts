@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../lib/api/withActiveUser";
 import { generateCoverLetter } from "../../../lib/generators/coverLetter";
 import { generateCvRewriteSuggestionsFromText } from "../../../lib/generators/cvRewriter";
 import { selectStrengthHighlights } from "../../../lib/pipeline";
@@ -24,6 +25,7 @@ function asStringArray(v: unknown): string[] {
 }
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: GenerateAssetsBody;
   try {
     body = (await request.json()) as GenerateAssetsBody;
@@ -105,4 +107,5 @@ export async function POST(request: NextRequest) {
     },
     { status: 200 },
   );
+  });
 }

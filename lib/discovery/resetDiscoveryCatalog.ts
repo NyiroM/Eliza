@@ -2,12 +2,12 @@
 // Wipe local discovery catalog and pipeline “seen” state so the next sync can treat jobs as new.
 import { mkdir, writeFile } from "node:fs/promises";
 import {
-  DISCOVERY_DIR,
-  DISCOVERY_DUPE_INDEX_PATH,
-  DISCOVERY_EVAL_FAILURES_PATH,
-  DISCOVERY_EVAL_QUEUE_PATH,
-  DISCOVERY_EVALUATED_IDS_PATH,
-  DISCOVERY_JOBS_PATH,
+  getDiscoveryDir,
+  getDiscoveryDupeIndexPath,
+  getDiscoveryEvalFailuresPath,
+  getDiscoveryEvalQueuePath,
+  getDiscoveryEvaluatedIdsPath,
+  getDiscoveryJobsPath,
 } from "./paths";
 
 export type ResetDiscoveryCatalogResult = {
@@ -23,13 +23,13 @@ export type ResetDiscoveryCatalogResult = {
 
 /** Truncate jobs.jsonl and reset evaluated ids, eval queue, eval failure store, and cross-provider dupe index. */
 export async function resetDiscoveryCatalogForDuplicateFilter(): Promise<ResetDiscoveryCatalogResult> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
-  await writeFile(DISCOVERY_JOBS_PATH, "", "utf-8");
-  await writeFile(DISCOVERY_EVALUATED_IDS_PATH, JSON.stringify([], null, 2), "utf-8");
-  await writeFile(DISCOVERY_EVAL_QUEUE_PATH, JSON.stringify({ items: [] }, null, 2), "utf-8");
-  await writeFile(DISCOVERY_EVAL_FAILURES_PATH, JSON.stringify({ items: [] }, null, 2), "utf-8");
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  await writeFile(getDiscoveryJobsPath(), "", "utf-8");
+  await writeFile(getDiscoveryEvaluatedIdsPath(), JSON.stringify([], null, 2), "utf-8");
+  await writeFile(getDiscoveryEvalQueuePath(), JSON.stringify({ items: [] }, null, 2), "utf-8");
+  await writeFile(getDiscoveryEvalFailuresPath(), JSON.stringify({ items: [] }, null, 2), "utf-8");
   await writeFile(
-    DISCOVERY_DUPE_INDEX_PATH,
+    getDiscoveryDupeIndexPath(),
     JSON.stringify(
       { version: 1, updated_at: new Date().toISOString(), buckets: {} } as const,
       null,

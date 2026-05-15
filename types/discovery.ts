@@ -45,11 +45,15 @@ export type DiscoveredJob = {
   discovered_at: string;
 };
 
+import type { SalaryForecastDisplay } from "./pipeline";
+
 /** Salary Oracle output attached to discovery rows (same run as Veto pipeline). */
 export type DiscoverySalaryForecastSnapshot = {
   match_status: "above_limit" | "borderline" | "below_limit";
   source: "posted" | "market_benchmark";
   rationale: string;
+  /** When present, prefer this over `rationale` for UI (structured + icons). */
+  display?: SalaryForecastDisplay;
 };
 
 export type DiscoveryMatchRow = {
@@ -138,6 +142,13 @@ export type DiscoveryProgressState = {
   step_started_at?: string;
   /** ISO time when the current `processEvalQueue` batch started (job 1 of this batch). */
   eval_batch_started_at?: string;
+  /**
+   * Total eval-queue units for this discovery run (completed + still queued on disk when computed).
+   * Set at sync end and first eval batch; stable across drain rounds until the session clears.
+   */
+  evalSessionGrandTotal?: number;
+  /** `sessionLiveStats.jobsEvaluated` snapshot at the start of the current eval batch (for progress math mid-batch). */
+  evalBatchBaseJobsEvaluated?: number;
 };
 
 export type DiscoveryProcessQueueResult = {

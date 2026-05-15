@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getKeywordsForSync, mergeApprovedPhraseIntoSearchKeywords } from "@/lib/discovery/keywordSync";
+import { SalaryForecastCard } from "@/app/components/SalaryForecastCard";
+import {
+  buildDiscoveryListsHtmlDocument,
+  downloadDiscoveryListsHtml,
+} from "@/lib/discovery/exportDiscoveryListsHtml";
+import { elizaFetch } from "@/lib/elizaFetch";
 import {
   BTN_GHOST_AMBER_SM,
   BTN_GHOST_ROSE_SM,
@@ -18,13 +24,14 @@ import type {
   DiscoveryProgressState,
   DiscoveryProviderId,
   DiscoverySalaryForecastSnapshot,
+  DiscoverySessionLiveStats,
   DiscoverySettings,
 } from "@/types/discovery";
 
 type Props = {
   selectedModel: string;
   preferredLocation: string;
-  /** True when `storage/user_cv.json` exists (same gate as manual analysis). */
+  /** True when the active profile has a stored CV (same gate as manual analysis). */
   cvLoaded: boolean;
 };
 
@@ -76,7 +83,7 @@ function SalaryForecastBlock({ s }: { s: DiscoverySalaryForecastSnapshot }) {
   return (
     <div className="text-xs mt-1.5 rounded border border-cyan-900/50 bg-cyan-950/25 px-2 py-1.5 space-y-0.5">
       <p className="font-medium text-cyan-200/90">Salary forecast · {salaryForecastHeading(s)}</p>
-      <p className="text-slate-400 leading-snug">{s.rationale}</p>
+      <SalaryForecastCard s={s} />
     </div>
   );
 }
@@ -169,6 +176,28 @@ function discoveryEvalEtaMs(p: DiscoveryProgressState, nowMs: number): number | 
   return avgPerCompleted * jobsLeftInBatch;
 }
 
+/** Full eval-queue progress (completed vs session total), not just the current Veto batch slice. */
+function discoveryEvalQueueProgressFromLive(
+  p: DiscoveryProgressState,
+  session: DiscoverySessionLiveStats | undefined,
+): { completed: number; grand: number; pct: number } | null {
+  const grand = p.evalSessionGrandTotal;
+  if (grand == null || grand <= 0) return null;
+  const batchBase = p.evalBatchBaseJobsEvaluated ?? 0;
+  const idx = p.analysisIndex;
+  const jobsFromSession = session?.jobsEvaluated ?? 0;
+  let completed: number;
+  if (idx != null && idx >= 1) {
+    const fromWave = batchBase + (idx - 1);
+    completed = Math.max(fromWave, jobsFromSession);
+  } else {
+    completed = jobsFromSession;
+  }
+  completed = Math.min(grand, Math.max(0, completed));
+  const pct = Math.min(100, (completed / grand) * 100);
+  return { completed, grand, pct };
+}
+
 function DiscoveryPipelineTrace({ p, nowMs }: { p: DiscoveryProgressState; nowMs: number }) {
   const runStart = parseIsoMs(p.pipeline_run_started_at);
   const stepStart = parseIsoMs(p.step_started_at);
@@ -196,11 +225,19 @@ function DiscoveryPipelineTrace({ p, nowMs }: { p: DiscoveryProgressState; nowMs
         ))}
       </ol>
       {hint ? <p className="text-slate-400/90">{hint}</p> : null}
+      {(p.phase === "analyzing" || p.phase === "draining") && (
+        <p className="text-slate-400/90 border-t border-slate-700/60 pt-2">
+          Egy sor „Analyzing job …” alatt előbb jöhet rövid leírás miatti LinkedIn / hálózati bővítés, utána több
+          Ollama-lépés — GPU nélkül is eltelhet idő. Az „Updated” sor kb. 45 mp-enként frissül, ha a szerver fut a
+          legújabb kóddal; ha hosszan mozdulatlan, indítsd újra a dev szervert (HMR közben is elakadhat egy régi
+          kérés).
+        </p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 border-t border-slate-700/60 pt-2 tabular-nums">
         <p>
           <span className="text-slate-500">Eltelt (futás):</span>{" "}
           <span className="text-slate-100">{runElapsed != null ? formatDurationHu(runElapsed) : "—"}</span>
-          <span className="text-slate-500"> · sync POST óta</span>
+          <span className="text-slate-500"> · a Discovery futás eleje óta (sync vagy reevaluate)</span>
         </p>
         <p>
           <span className="text-slate-500">Eltelt (aktuális rész-lépés):</span>{" "}
@@ -278,7 +315,7 @@ async function discoveryDrainEvalQueue(opts: {
   let lastRem = -1;
 
   while (remaining > 0 && rounds < DISCOVERY_DRAIN_MAX_ROUNDS) {
-    const pr = await fetch("/api/discovery/process-queue", {
+    const pr = await elizaFetch("/api/discovery/process-queue", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
       body: JSON.stringify({
@@ -375,6 +412,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [resetCatalogBusy, setResetCatalogBusy] = useState(false);
   const [resetMatchListsBusy, setResetMatchListsBusy] = useState(false);
+  const [clearListsBusy, setClearListsBusy] = useState(false);
   const syncInFlight = useRef(false);
   const intervalRef = useRef<number | null>(null);
   /** Prevents overlapping auto-resume drains when progress still shows “continuing in the background…”. */
@@ -382,7 +420,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
 
   const loadSettings = useCallback(async () => {
     try {
-      const res = await fetch("/api/discovery/settings");
+      const res = await elizaFetch("/api/discovery/settings");
       let data = (await res.json()) as DiscoverySettings;
       try {
         const ls = localStorage.getItem("eliza_discovery_auto_sync_interval_minutes");
@@ -403,7 +441,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
 
   const loadMatches = useCallback(async () => {
     try {
-      const res = await fetch("/api/discovery/matches");
+      const res = await elizaFetch("/api/discovery/matches");
       const data = (await res.json()) as {
         matches?: DiscoveryMatchRow[];
         nonMatches?: DiscoveryNonMatchRow[];
@@ -428,7 +466,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   const removeMatch = useCallback(async (row: DiscoveryMatchRow) => {
     setMatches((list) => list.filter((x) => x.job_id !== row.job_id));
     try {
-      const res = await fetch(`/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}`, {
+      const res = await elizaFetch(`/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}`, {
         method: "DELETE",
         headers: { "X-Eliza-Internal": "true" },
       });
@@ -452,7 +490,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   const removeNonMatch = useCallback(async (row: DiscoveryNonMatchRow) => {
     setNonMatches((list) => list.filter((x) => x.job_id !== row.job_id));
     try {
-      const res = await fetch(
+      const res = await elizaFetch(
         `/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}&list=rejects`,
         { method: "DELETE", headers: { "X-Eliza-Internal": "true" } },
       );
@@ -472,6 +510,58 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
       setMessage("Could not remove that listing from the not-a-match list.");
     }
   }, [loadMatches]);
+
+  const clearLoadedMatchLists = useCallback(async () => {
+    const snapM = matches;
+    const snapN = nonMatches;
+    if (snapM.length === 0 && snapN.length === 0) return;
+    const ok1 = window.confirm(
+      `Remove every row currently shown in New matches (${snapM.length}) and Evaluated, not a match (${snapN.length})? Each row is removed the same way as the trash icon (suppressed in storage). This is not reversible from the UI.`,
+    );
+    if (!ok1) return;
+    const typed = window.prompt(
+      'Second step: type CLEAR in capital letters to confirm.',
+      "",
+    );
+    if (typed !== "CLEAR") {
+      setMessage(typed == null ? "Clear lists cancelled." : "Clear lists cancelled — type CLEAR exactly to confirm.");
+      return;
+    }
+    setClearListsBusy(true);
+    setMessage(null);
+    setMatches([]);
+    setNonMatches([]);
+    const deleteRow = async (path: string): Promise<boolean> => {
+      try {
+        const res = await elizaFetch(path, { method: "DELETE", headers: { "X-Eliza-Internal": "true" } });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const outcomes = await Promise.all([
+        ...snapM.map((row) => deleteRow(`/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}`)),
+        ...snapN.map((row) =>
+          deleteRow(`/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}&list=rejects`),
+        ),
+      ]);
+      const failed = outcomes.filter((ok) => !ok).length;
+      await loadMatches();
+      if (failed > 0) {
+        setMessage(
+          `${failed} of ${outcomes.length} remove request(s) failed; lists and totals were reloaded from the server.`,
+        );
+      } else {
+        setMessage(null);
+      }
+    } catch {
+      await loadMatches();
+      setMessage("Clear lists failed; lists reloaded from the server.");
+    } finally {
+      setClearListsBusy(false);
+    }
+  }, [matches, nonMatches, loadMatches]);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -495,7 +585,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     keyword_suggestions?: DiscoveryKeywordSuggestion[];
     providers?: Partial<Record<DiscoveryProviderId, Partial<DiscoverySettings["providers"][DiscoveryProviderId]>>>;
   }) => {
-    const res = await fetch("/api/discovery/settings", {
+    const res = await elizaFetch("/api/discovery/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
       body: JSON.stringify(partial),
@@ -509,10 +599,10 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     setMessage(null);
   };
 
-  /** Reads `storage/discovery/progress.json` — must work even when this tab never called `runSync` (Strict remount, refresh mid-sync). */
+  /** Reads per-profile discovery progress — must work even when this tab never called `runSync` (Strict remount, refresh mid-sync). */
   const fetchDiscoveryProgress = useCallback(async () => {
     try {
-      const r = await fetch("/api/discovery/progress");
+      const r = await elizaFetch("/api/discovery/progress");
       const p = (await r.json()) as DiscoveryProgressState;
       const idleLike = p.phase === "idle" && !(p.message && String(p.message).trim());
       const next = idleLike ? null : p;
@@ -562,7 +652,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
       setMessage(null);
       void fetchDiscoveryProgress();
       try {
-        const res = await fetch("/api/discovery/sync", {
+        const res = await elizaFetch("/api/discovery/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
           body: JSON.stringify({
@@ -729,7 +819,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     setMessage(null);
     void fetchDiscoveryProgress();
     try {
-      const res = await fetch("/api/discovery/reevaluate", {
+      const res = await elizaFetch("/api/discovery/reevaluate", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({
@@ -994,35 +1084,17 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     <div className="space-y-6">
       {serverProgressLive && liveProgress ? (
         <div
-          className="rounded-lg border border-blue-800/50 bg-blue-950/40 p-4 text-sm text-blue-100 space-y-3"
+          className="rounded-lg border border-violet-500/35 bg-violet-950/55 p-4 text-sm text-violet-100 space-y-3"
           aria-live="polite"
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">Live progress</p>
-              <p className="mt-0.5 text-base font-semibold text-blue-50">{discoveryPhaseHeading(liveProgress.phase)}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Live progress</p>
+              <p className="mt-0.5 text-base font-semibold text-violet-50">{discoveryPhaseHeading(liveProgress.phase)}</p>
               {discoveryProviderLabel(liveProgress.provider) ? (
-                <p className="text-xs text-blue-200/85 mt-0.5">Source: {discoveryProviderLabel(liveProgress.provider)}</p>
+                <p className="text-xs text-violet-200/85 mt-0.5">Source: {discoveryProviderLabel(liveProgress.provider)}</p>
               ) : null}
             </div>
-            {liveProgress.phase === "analyzing" || liveProgress.phase === "draining" ? (
-              (() => {
-                const idx = liveProgress.analysisIndex;
-                const tot = liveProgress.analysisTotal;
-                if (idx == null || tot == null || tot <= 0) return null;
-                const pct = Math.min(100, Math.round((idx / tot) * 100));
-                const afterThis = Math.max(0, tot - idx);
-                return (
-                  <div className="text-right tabular-nums">
-                    <p className="text-2xl font-bold text-blue-100 leading-none">{pct}%</p>
-                    <p className="text-[11px] text-blue-200/90 mt-1">
-                      Job {idx} of {tot} in this batch
-                    </p>
-                    <p className="text-[11px] text-blue-300/80">{afterThis} left after this one</p>
-                  </div>
-                );
-              })()
-            ) : null}
           </div>
 
           <DiscoveryPipelineTrace p={liveProgress} nowMs={progressClockNow} />
@@ -1030,14 +1102,14 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           {liveProgress.phase === "fetching" &&
           liveProgress.fetchKeywordIndex != null &&
           liveProgress.fetchKeywordTotal != null ? (
-            <div className="rounded-md border border-blue-800/40 bg-slate-900/40 px-3 py-2 text-[11px] text-blue-100/95 space-y-1">
+            <div className="rounded-md border border-violet-600/35 bg-violet-950/35 px-3 py-2 text-[11px] text-violet-100/95 space-y-1">
               <p className="tabular-nums">
                 Seed phrase <strong>{liveProgress.fetchKeywordIndex}</strong> of{" "}
                 <strong>{liveProgress.fetchKeywordTotal}</strong> for this source ·{" "}
                 <strong>{liveProgress.keywordsInListTotal ?? "—"}</strong> phrase(s) in Search keywords
               </p>
               {liveProgress.fetchPhraseDurationMs != null ? (
-                <p className="text-blue-200/85">
+                <p className="text-violet-200/85">
                   Last phrase completed in {(liveProgress.fetchPhraseDurationMs / 1000).toFixed(1)}s
                 </p>
               ) : null}
@@ -1061,46 +1133,83 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
 
           {liveProgress.phase === "analyzing" || liveProgress.phase === "draining" ? (
             (() => {
+              const qp = discoveryEvalQueueProgressFromLive(liveProgress, liveProgress.sessionLiveStats);
               const idx = liveProgress.analysisIndex;
               const tot = liveProgress.analysisTotal;
-              if (idx == null || tot == null || tot <= 0) {
+              if (qp) {
+                const { completed, grand, pct } = qp;
                 return (
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800/80" aria-hidden>
-                    <div className="h-full w-full animate-pulse rounded-full bg-blue-500/35" />
+                  <div className="space-y-1">
+                    <div className="flex items-baseline justify-between gap-2 text-[11px] text-violet-100/90 tabular-nums">
+                      <span>
+                        <span className="font-semibold text-violet-50">{completed}</span>
+                        <span className="text-violet-300/80"> / {grand}</span>
+                        <span className="text-violet-400/80"> · evaluated vs total queue workload this run</span>
+                      </span>
+                      <span className="shrink-0 font-semibold text-violet-50">{Math.round(pct)}%</span>
+                    </div>
+                    <div
+                      className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800/90 ring-1 ring-violet-700/45"
+                      role="progressbar"
+                      aria-valuenow={completed}
+                      aria-valuemin={0}
+                      aria-valuemax={grand}
+                      aria-label={`Eval queue progress ${completed} of ${grand}`}
+                    >
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-violet-400 transition-[width] duration-300 ease-out"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-violet-200/75">
+                      Match lists below refresh after each drain round when jobs finish.
+                    </p>
                   </div>
                 );
               }
-              const pct = Math.min(100, (idx / tot) * 100);
+              if (idx == null || tot == null || tot <= 0) {
+                return (
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800/80" aria-hidden>
+                    <div className="h-full w-full animate-pulse rounded-full bg-violet-500/35" />
+                  </div>
+                );
+              }
+              const pctLegacy = Math.min(100, (idx / tot) * 100);
               return (
                 <div className="space-y-1">
+                  <div className="flex items-baseline justify-between gap-2 text-[11px] text-violet-100/90 tabular-nums">
+                    <span>
+                      Job <span className="font-semibold text-violet-50">{idx}</span> of {tot} (batch)
+                    </span>
+                    <span className="shrink-0 font-semibold text-violet-50">{Math.round(pctLegacy)}%</span>
+                  </div>
                   <div
-                    className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800/90 ring-1 ring-blue-900/40"
+                    className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800/90 ring-1 ring-violet-700/45"
                     role="progressbar"
-                    aria-valuenow={Math.round(pct)}
+                    aria-valuenow={Math.round(pctLegacy)}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-label="Pipeline progress for this batch"
                   >
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-blue-600 to-sky-400 transition-[width] duration-300 ease-out"
-                      style={{ width: `${pct}%` }}
+                      className="h-full rounded-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-violet-400 transition-[width] duration-300 ease-out"
+                      style={{ width: `${pctLegacy}%` }}
                     />
                   </div>
-                  <p className="text-[11px] text-blue-200/75">
-                    Bar = position in the current Veto batch only. Match lists below refresh after each drain round when
-                    jobs finish.
+                  <p className="text-[11px] text-violet-200/75">
+                    Match lists below refresh after each drain round when jobs finish.
                   </p>
                 </div>
               );
             })()
           ) : (
             <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800/80" aria-hidden>
-              <div className="h-full w-full animate-pulse rounded-full bg-blue-500/30" />
+              <div className="h-full w-full animate-pulse rounded-full bg-violet-500/30" />
             </div>
           )}
 
-          <p className="text-sm text-blue-50/95 leading-snug border-t border-blue-800/40 pt-2">{liveProgress.message}</p>
-          <p className="text-[10px] text-blue-400/70 tabular-nums">
+          <p className="text-sm text-violet-50/95 leading-snug border-t border-violet-600/40 pt-2">{liveProgress.message}</p>
+          <p className="text-[10px] text-violet-400/70 tabular-nums">
             Updated {formatTime(liveProgress.updatedAt)}
           </p>
         </div>
@@ -1145,7 +1254,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
               setResetCatalogBusy(true);
               setMessage(null);
               try {
-                const res = await fetch("/api/discovery/reset-catalog", {
+                const res = await elizaFetch("/api/discovery/reset-catalog", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
                   body: "{}",
@@ -1191,7 +1300,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
               setResetMatchListsBusy(true);
               setMessage(null);
               try {
-                const res = await fetch("/api/discovery/reset-match-lists", {
+                const res = await elizaFetch("/api/discovery/reset-match-lists", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
                   body: "{}",
@@ -1240,10 +1349,6 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
               }}
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
             />
-            <span className="text-[11px] text-slate-600">
-              Stored on server under <code className="text-slate-500">storage/discovery/</code> and mirrored in{" "}
-              <code className="text-slate-500">localStorage</code> on save.
-            </span>
           </label>
           <label className="block space-y-1">
             <span className="text-xs text-slate-500">Match notify threshold (%)</span>
@@ -1263,7 +1368,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           </label>
         </div>
         <label className="block space-y-1">
-          <span className="text-xs text-slate-500">Search keywords</span>
+          <span className="text-xs text-slate-500">Search keywords ({syncPhrases.length})</span>
           <textarea
             rows={3}
             value={settings.search_keywords}
@@ -1282,11 +1387,6 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
             Sync is disabled until this field has at least one keyword or you approve a suggested keyword.
           </p>
         ) : null}
-        {canSync ? (
-          <p className="text-xs text-slate-600">
-            Active sync phrases ({syncPhrases.length}): {syncPhrases.join(" · ")}
-          </p>
-        ) : null}
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Suggested keywords (AI)</h3>
@@ -1297,7 +1397,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                 setSuggestBusy(true);
                 setMessage(null);
                 try {
-                  const res = await fetch("/api/discovery/suggest-keywords", {
+                  const res = await elizaFetch("/api/discovery/suggest-keywords", {
                     method: "POST",
                     headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
                     body: JSON.stringify({ model: selectedModel }),
@@ -1472,6 +1572,37 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           className={BTN_GHOST_VIOLET_LG}
         >
           {busyProvider === "reevaluate" ? "Reevaluating…" : "AI reevaluate"}
+        </button>
+        <button
+          type="button"
+          disabled={!settings}
+          title="Download HTML with the New matches and Evaluated, not a match rows currently loaded in this panel (clickable links). Open in a browser or Word; use Print → Save as PDF for a PDF."
+          onClick={() => {
+            if (!settings) return;
+            const html = buildDiscoveryListsHtmlDocument({
+              exportedAtIso: new Date().toISOString(),
+              thresholdPercent: settings.match_notify_threshold_percent,
+              matches,
+              nonMatches,
+              newMatchesTotal,
+              nonMatchesTotal,
+            });
+            downloadDiscoveryListsHtml(html);
+          }}
+          className={BTN_GHOST_SM}
+        >
+          Export lists (HTML)
+        </button>
+        <button
+          type="button"
+          disabled={
+            clearListsBusy || (matches.length === 0 && nonMatches.length === 0) || busyProvider !== null
+          }
+          title="Two-step confirmation, then removes each loaded row via the same API as the trash icon (suppresses listings). Only clears rows currently shown in this panel (same tail as export)."
+          onClick={() => void clearLoadedMatchLists()}
+          className={BTN_GHOST_ROSE_SM}
+        >
+          {clearListsBusy ? "Clearing…" : "Clear lists"}
         </button>
       </div>
 

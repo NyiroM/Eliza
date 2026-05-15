@@ -1,16 +1,56 @@
 // lib/discovery/paths.ts
 import path from "node:path";
+import { requireUserRoot } from "../storage/activeUserContext";
 
-const STORAGE = path.join(process.cwd(), "storage");
-export const DISCOVERY_DIR = path.join(STORAGE, "discovery");
-export const DISCOVERY_SETTINGS_PATH = path.join(DISCOVERY_DIR, "settings.json");
-export const DISCOVERY_JOBS_PATH = path.join(DISCOVERY_DIR, "jobs.jsonl");
-export const DISCOVERY_EVALUATED_IDS_PATH = path.join(DISCOVERY_DIR, "evaluated_ids.json");
-export const DISCOVERY_NEW_MATCHES_PATH = path.join(DISCOVERY_DIR, "new_matches.jsonl");
-export const DISCOVERY_NON_MATCHES_PATH = path.join(DISCOVERY_DIR, "non_matches.jsonl");
-export const DISCOVERY_PROGRESS_PATH = path.join(DISCOVERY_DIR, "progress.json");
-export const DISCOVERY_EVAL_QUEUE_PATH = path.join(DISCOVERY_DIR, "eval_queue.json");
-export const DISCOVERY_EVAL_FAILURES_PATH = path.join(DISCOVERY_DIR, "eval_failures.json");
-export const DISCOVERY_SUPPRESSED_IDS_PATH = path.join(DISCOVERY_DIR, "suppressed_ids.json");
-export const DISCOVERY_DUPE_INDEX_PATH = path.join(DISCOVERY_DIR, "dupe_index.json");
-export const DISCOVERY_DEBUG_DIR = path.join(STORAGE, "debug");
+function discoveryDir(): string {
+  return path.join(requireUserRoot(), "discovery");
+}
+
+export function getDiscoveryDir(): string {
+  return discoveryDir();
+}
+
+export function getDiscoverySettingsPath(): string {
+  return path.join(discoveryDir(), "settings.json");
+}
+
+export function getDiscoveryJobsPath(): string {
+  return path.join(discoveryDir(), "jobs.jsonl");
+}
+
+export function getDiscoveryEvaluatedIdsPath(): string {
+  return path.join(discoveryDir(), "evaluated_ids.json");
+}
+
+export function getDiscoveryNewMatchesPath(): string {
+  return path.join(discoveryDir(), "new_matches.jsonl");
+}
+
+export function getDiscoveryNonMatchesPath(): string {
+  return path.join(discoveryDir(), "non_matches.jsonl");
+}
+
+export function getDiscoveryProgressPath(): string {
+  return path.join(discoveryDir(), "progress.json");
+}
+
+export function getDiscoveryEvalQueuePath(): string {
+  return path.join(discoveryDir(), "eval_queue.json");
+}
+
+export function getDiscoveryEvalFailuresPath(): string {
+  return path.join(discoveryDir(), "eval_failures.json");
+}
+
+export function getDiscoverySuppressedIdsPath(): string {
+  return path.join(discoveryDir(), "suppressed_ids.json");
+}
+
+export function getDiscoveryDupeIndexPath(): string {
+  return path.join(discoveryDir(), "dupe_index.json");
+}
+
+/** Per-user debug captures (screenshots / DOM dumps). */
+export function getDiscoveryDebugDir(): string {
+  return path.join(requireUserRoot(), "debug");
+}

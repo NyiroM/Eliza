@@ -212,6 +212,99 @@ export function getRelevanceScoreOllamaFormat(model: string): "json" | Record<st
 }
 
 /**
+ * JSON Schema for the semantic fit review payload (Ollama `format` object).
+ * Property order matches the prompt's required output order; Ollama's structured-output
+ * generation emits keys in this order, which keeps the model's reasoning aligned with
+ * the prompt instructions (logic + veto before narrative).
+ * Mirrors `parseSemanticFitReviewPayload` in `lib/pipeline.ts`.
+ */
+export const SEMANTIC_FIT_REVIEW_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    vetoed: { type: "boolean" },
+    veto_reason: { type: ["string", "null"] },
+    score_components: {
+      type: "object",
+      properties: {
+        base_semantic: { type: "integer" },
+        skill_overlap_delta: { type: "integer" },
+        experience_delta: { type: "integer" },
+        constraint_delta: { type: "integer" },
+        advantage_bonus: { type: "integer", minimum: 0 },
+      },
+      required: [
+        "base_semantic",
+        "skill_overlap_delta",
+        "experience_delta",
+        "constraint_delta",
+        "advantage_bonus",
+      ],
+    },
+    fit_score: { type: "integer", minimum: 0, maximum: 100 },
+    mathematical_breakdown: { type: "string" },
+    one_sentence_summary: { type: "string", maxLength: 400 },
+    narrative_summary: { type: "string" },
+    matched_skills: { type: "array", items: { type: "string" } },
+    missing_skills: { type: "array", items: { type: "string" } },
+    irrelevant_extra_skills: { type: "array", items: { type: "string" } },
+    interview_prep: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        properties: {
+          question: { type: "string" },
+          cheat_sheet: { type: "string" },
+        },
+        required: ["question", "cheat_sheet"],
+      },
+    },
+    seniority_match: { type: "boolean" },
+    metadata_fit_badge: {
+      type: ["string", "null"],
+      enum: ["Location Conflict", "Preference Match", null],
+    },
+    vibe_warnings: { type: "array", items: { type: "string" } },
+    semantic_highlights: {
+      type: "array",
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: {
+          phrase: { type: "string" },
+          sentiment: { type: "string", enum: ["positive", "negative"] },
+          reason: { type: "string" },
+        },
+        required: ["phrase", "sentiment", "reason"],
+      },
+    },
+  },
+  required: [
+    "vetoed",
+    "fit_score",
+    "mathematical_breakdown",
+    "one_sentence_summary",
+    "matched_skills",
+    "missing_skills",
+    "seniority_match",
+  ],
+};
+
+/**
+ * Schema-capable families for the semantic fit review (same gating logic as
+ * {@link getRelevanceScoreOllamaFormat}); other models fall back to `format: "json"`.
+ * Constrained generation eliminates the mid-output JSON corruption Gemma e4b hit at
+ * ~2300 chars on long postings.
+ */
+export function getSemanticFitReviewOllamaFormat(model: string): "json" | Record<string, unknown> {
+  const m = model.toLowerCase();
+  if (isLlama31_8B(m) || isGemmaModel(m) || isQwen25Family(m)) {
+    return SEMANTIC_FIT_REVIEW_JSON_SCHEMA;
+  }
+  return "json";
+}
+
+/**
  * Strips reasoning blocks and markdown JSON fences, then extracts the first balanced `{`…`}`
  * JSON object (string-aware). Falls back to returning trimmed text if no balanced object exists.
  */

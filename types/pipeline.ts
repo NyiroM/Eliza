@@ -16,6 +16,31 @@ export type SemanticHighlight = {
   reason: string;
 };
 
+/** ISO codes used in salary oracle + floor comparison. */
+export type SalaryForecastCurrency = "USD" | "EUR" | "GBP" | "HUF" | "PLN" | "JPY";
+
+/** Structured lines for compact UI (replaces a single opaque rationale string). */
+export type SalaryForecastDisplay = {
+  /** First line: typical amount (readers see the estimate first). */
+  estimate_headline: string;
+  low_confidence: boolean;
+  /** Salary range parsed from the job posting text (not Hays benchmark). */
+  source_from_posting: boolean;
+  /**
+   * When `source_from_posting` is false: discipline / function, Hays seniority band, role
+   * label used for the benchmark. Null for posted-salary rows.
+   */
+  benchmark_basis: {
+    discipline: string | null;
+    seniority: string;
+    position: string;
+  } | null;
+  /** Comparison against the user’s stated minimum (same currency as the headline). */
+  floor_comparison: string;
+  /** Optional: experience blend, hot-skills uplift, hourly→monthly note, LLM refine, etc. */
+  supplement?: string;
+};
+
 /** How the job text entered the pipeline (dashboard paste vs Discovery Hub). */
 export type JobSourceKind =
   | "manual"
@@ -53,6 +78,8 @@ export type SalaryAnalysis = {
   match_status: "above_limit" | "borderline" | "below_limit";
   /** Short rationale for the user. */
   rationale: string;
+  /** Compact, human-readable breakdown for UI (HTML export, Discovery hub, dashboard). */
+  salary_forecast_display?: SalaryForecastDisplay;
   /** Where salary came from: posted ad or benchmark lookup. */
   source: "posted" | "market_benchmark";
   /** ISO currency code used by this analysis. */

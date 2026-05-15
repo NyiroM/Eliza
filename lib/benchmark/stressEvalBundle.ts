@@ -14,6 +14,7 @@ import {
   calculateFitScore,
   collectConstraintSignalHints,
   extractExperienceOverrideFromConstraints,
+  extractStatedExperienceYearsFromText,
   validateExperienceRequirement,
 } from "../scoring/fitScore";
 import type { StoredConstraintTactics } from "../storage/constraintTactics";
@@ -338,16 +339,32 @@ export function buildStressEvalBundle(rawCvText: string, opts?: BuildStressEvalB
     userExperienceOverride,
   );
 
+  const stressPreferredLocation =
+    "Budapest metropolitan area — weekly office or customer days acceptable; avoid listings that are de-facto relocation to Western Europe without relocation package.";
+
   const constraintHints = [
-    ...buildConstraintTacticHints(STRESS_TACTICS),
+    ...buildConstraintTacticHints(STRESS_TACTICS, stressPreferredLocation),
     ...collectConstraintSignalHints(STRESS_CONSTRAINTS, combinedJobText),
   ];
 
-  const skillSynonymsPromptJson = JSON.stringify(STRESS_SYNONYM_PAIRS).slice(0, 1500);
+  const skillSynonymsPromptJson = JSON.stringify(STRESS_SYNONYM_PAIRS);
+
+  const decisionBrief = {
+    job_location: STRESS_JOB_BOARD_META.job_location,
+    preferred_work_location: stressPreferredLocation,
+    work_model: STRESS_JOB_BOARD_META.work_model,
+    job_type: STRESS_JOB_BOARD_META.job_type,
+    job_experience_years: experienceYearsForScoring,
+    candidate_experience_years_hint:
+      userExperienceOverride ?? extractStatedExperienceYearsFromText(userProfileBlob.toLowerCase()),
+    baseline_fit_score: baseline.fit_score,
+    constraints_count: STRESS_CONSTRAINTS.length,
+  };
 
   const params: BuildSemanticFitScoreReviewPromptParams = {
     constraints: STRESS_CONSTRAINTS,
-    preferredLocation: "Budapest metropolitan area — weekly office or customer days acceptable; avoid listings that are de-facto relocation to Western Europe without relocation package.",
+    preferredLocation: stressPreferredLocation,
+    decisionBrief,
     jobTextEnglish,
     combinedJobText,
     jobBoardMetadata,

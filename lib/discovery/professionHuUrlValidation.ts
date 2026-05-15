@@ -1,5 +1,11 @@
 // lib/discovery/professionHuUrlValidation.ts — Profession.hu listing URL must reflect the intended search.
 
+import {
+  firstCommaLocationSegment,
+  JOB_BOARD_BROAD_LOCATION_SLUGS,
+  segmentToLocationSlug,
+} from "./locationPreferenceShared";
+
 function norm(s: string): string {
   return s.normalize("NFC").trim().toLowerCase();
 }
@@ -69,4 +75,17 @@ export function professionSearchNavigationFailureReason(pageUrl: string, expecte
     return "redirected to base Profession.hu listing without adv_pattern/keyword";
   }
   return "URL missing matching adv_pattern or keyword for this search phrase";
+}
+
+/**
+ * Maps dashboard target location (e.g. "Budapest, Hungary") to a Profession.hu path segment after `/allasok/`.
+ * Returns null when unset, too broad, or not slug-safe.
+ */
+export function professionHuLocationSlugFromPreference(preferredLocation: string | null | undefined): string | null {
+  const first = firstCommaLocationSegment(preferredLocation);
+  if (!first) return null;
+  const slug = segmentToLocationSlug(first);
+  if (!slug || slug.length > 48) return null;
+  if (JOB_BOARD_BROAD_LOCATION_SLUGS.has(slug)) return null;
+  return slug;
 }

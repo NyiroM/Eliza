@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import { expandDiscoveryPhrasesWithOllama } from "../../../../lib/discovery/expandSearchSynonyms";
 import { normalizeKeywordPhrase, sanitizeKeywordSuggestions } from "../../../../lib/discovery/keywordSync";
 import { loadDiscoverySettings, saveDiscoverySettings } from "../../../../lib/discovery/settings";
@@ -14,6 +15,7 @@ const NO_STORE = { "Cache-Control": "no-store, max-age=0" } as const;
 type Body = { model?: unknown };
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: Body;
   try {
     body = (await request.json()) as Body;
@@ -64,4 +66,5 @@ export async function POST(request: NextRequest) {
   await saveDiscoverySettings({ ...settings, keyword_suggestions: merged });
   const saved = await loadDiscoverySettings();
   return NextResponse.json(saved, { headers: NO_STORE });
+  });
 }

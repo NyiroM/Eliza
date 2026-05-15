@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../lib/api/withActiveUser";
 import { loadUserPreferences, saveUserPreferences } from "../../../lib/storage/userPreferences";
 import {
   validateOllamaModelForStorage,
@@ -6,12 +7,15 @@ import {
   validatePreferredLocationForStorage,
 } from "../../../lib/validation";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const prefs = await loadUserPreferences();
   return NextResponse.json(prefs, { status: 200 });
+  });
 }
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: {
     preferred_location?: unknown;
     preferred_currency?: unknown;
@@ -63,4 +67,5 @@ export async function POST(request: NextRequest) {
   });
   const prefs = await loadUserPreferences();
   return NextResponse.json(prefs, { status: 200 });
+  });
 }

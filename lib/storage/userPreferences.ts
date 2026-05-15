@@ -1,9 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { OLLAMA_MODEL_MAX_LEN, PREFERRED_LOCATION_MAX_CHARS } from "../validation";
+import { requireUserRoot } from "./activeUserContext";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage");
-const PREFS_PATH = path.join(STORAGE_DIR, "user_preferences.json");
+function userPreferencesPath(): string {
+  return path.join(requireUserRoot(), "user_preferences.json");
+}
 
 export type UserPreferences = {
   preferred_location: string | null;
@@ -20,7 +22,7 @@ const DEFAULT_PREFS: UserPreferences = {
 
 export async function loadUserPreferences(): Promise<UserPreferences> {
   try {
-    const raw = await readFile(PREFS_PATH, "utf-8");
+    const raw = await readFile(userPreferencesPath(), "utf-8");
     const data = JSON.parse(raw) as Partial<UserPreferences>;
     const rawOm = typeof data.ollama_model === "string" ? data.ollama_model.trim() : "";
     return {
@@ -40,7 +42,8 @@ export async function loadUserPreferences(): Promise<UserPreferences> {
 }
 
 export async function saveUserPreferences(prefs: UserPreferences): Promise<void> {
-  await mkdir(STORAGE_DIR, { recursive: true });
+  const p = userPreferencesPath();
+  await mkdir(path.dirname(p), { recursive: true });
   const rawOmSave =
     typeof prefs.ollama_model === "string" && prefs.ollama_model.trim()
       ? prefs.ollama_model.trim().slice(0, OLLAMA_MODEL_MAX_LEN)
@@ -56,5 +59,5 @@ export async function saveUserPreferences(prefs: UserPreferences): Promise<void>
         : null,
     ollama_model: rawOmSave,
   };
-  await writeFile(PREFS_PATH, JSON.stringify(payload, null, 2), "utf-8");
+  await writeFile(p, JSON.stringify(payload, null, 2), "utf-8");
 }

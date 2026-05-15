@@ -45,7 +45,10 @@ export function shouldSuppressHardVetoForTactics(
   return st === "strong_preference";
 }
 
-export function buildConstraintTacticHints(tactics: StoredConstraintTactics): string[] {
+export function buildConstraintTacticHints(
+  tactics: StoredConstraintTactics,
+  preferredLocation?: string | null,
+): string[] {
   const out: string[] = [];
   const domains: ConstraintTacticDomain[] = ["location", "remote_zone", "compensation"];
   for (const d of domains) {
@@ -53,6 +56,19 @@ export function buildConstraintTacticHints(tactics: StoredConstraintTactics): st
     if (st === "strong_preference") {
       out.push(
         `User policy: ${d.replaceAll("_", " ")} is a strong preference — never set vetoed=true for clashes that are only about this domain; apply a large negative constraint_delta instead.`,
+      );
+    }
+  }
+  const ploc = typeof preferredLocation === "string" ? preferredLocation.trim() : "";
+  if (ploc.length > 0) {
+    const primary = ploc.split(",")[0]?.trim() ?? ploc;
+    if (stanceFor(tactics, "location") === "default") {
+      out.push(
+        `DASHBOARD_GEOGRAPHY: tactics.location=default — compare DECISION_BRIEF.preferred_work_location / primary token "${primary}" to job_location and JOB_TEXT; material city/region mismatch ⇒ hard veto (same stance family as remote_zone default).`,
+      );
+    } else {
+      out.push(
+        `DASHBOARD_GEOGRAPHY: tactics.location=strong_preference — same comparison; material mismatch ⇒ large negative constraint_delta and "Location Conflict" badge, never hard veto for geography alone.`,
       );
     }
   }

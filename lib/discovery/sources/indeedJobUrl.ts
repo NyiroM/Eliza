@@ -4,13 +4,25 @@ import type { Element } from "domhandler";
 
 export const INDEED_HU_ORIGIN = "https://hu.indeed.com";
 
-const SENTINEL_JKS = new Set(["123456789abcdef0"]);
+// Indeed renders skeleton/template anchors whose `jk` is a rotation of "0123456789abcdef"
+// (e.g. "123456789abcdef0", "789abcdef0123456"). Real jks are random 16-char hex; the chance
+// a genuine one is a permutation containing every hex digit exactly once is ~16!/16^16 ≈ 2.7e-7,
+// so that signature is treated as a sentinel.
+const SENTINEL_JKS = new Set(["123456789abcdef0", "789abcdef0123456"]);
+
+function isHexDigitPermutationSentinel(jk: string): boolean {
+  if (jk.length !== 16) return false;
+  if (!/^[0-9a-f]{16}$/.test(jk)) return false;
+  return new Set(jk).size === 16;
+}
 
 function isValidIndeedJk(jk: string): boolean {
   const j = jk.trim();
   if (j.length < 10 || j.length > 24) return false;
   if (!/^[a-zA-Z0-9_-]+$/.test(j)) return false;
-  if (SENTINEL_JKS.has(j.toLowerCase())) return false;
+  const lower = j.toLowerCase();
+  if (SENTINEL_JKS.has(lower)) return false;
+  if (isHexDigitPermutationSentinel(lower)) return false;
   return true;
 }
 

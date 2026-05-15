@@ -1,17 +1,17 @@
 // lib/discovery/nonMatchesStore.ts
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import type { DiscoveryNonMatchRow } from "../../types/discovery";
-import { DISCOVERY_DIR, DISCOVERY_NON_MATCHES_PATH } from "./paths";
+import { getDiscoveryDir, getDiscoveryNonMatchesPath } from "./paths";
 
 export async function appendNonMatch(row: DiscoveryNonMatchRow): Promise<void> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
-  await appendFile(DISCOVERY_NON_MATCHES_PATH, `${JSON.stringify(row)}\n`, "utf-8");
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  await appendFile(getDiscoveryNonMatchesPath(), `${JSON.stringify(row)}\n`, "utf-8");
 }
 
 /** First matching row for a job_id (scan full file). */
 export async function findNonMatchRowByJobId(jobId: string): Promise<DiscoveryNonMatchRow | null> {
   try {
-    const raw = await readFile(DISCOVERY_NON_MATCHES_PATH, "utf-8");
+    const raw = await readFile(getDiscoveryNonMatchesPath(), "utf-8");
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
@@ -29,10 +29,10 @@ export async function findNonMatchRowByJobId(jobId: string): Promise<DiscoveryNo
 
 /** Removes all lines whose JSON job_id matches (rewrites non_matches.jsonl). */
 export async function removeNonMatchesByJobId(jobId: string): Promise<{ removed: number }> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
+  await mkdir(getDiscoveryDir(), { recursive: true });
   let raw = "";
   try {
-    raw = await readFile(DISCOVERY_NON_MATCHES_PATH, "utf-8");
+    raw = await readFile(getDiscoveryNonMatchesPath(), "utf-8");
   } catch {
     return { removed: 0 };
   }
@@ -52,7 +52,7 @@ export async function removeNonMatchesByJobId(jobId: string): Promise<{ removed:
     }
   }
   await writeFile(
-    DISCOVERY_NON_MATCHES_PATH,
+    getDiscoveryNonMatchesPath(),
     kept.length > 0 ? `${kept.join("\n")}\n` : "",
     "utf-8",
   );
@@ -61,14 +61,14 @@ export async function removeNonMatchesByJobId(jobId: string): Promise<{ removed:
 
 /** Truncate non_matches.jsonl (“Evaluated, not a match” list). */
 export async function clearAllNonMatches(): Promise<void> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
-  await writeFile(DISCOVERY_NON_MATCHES_PATH, "", "utf-8");
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  await writeFile(getDiscoveryNonMatchesPath(), "", "utf-8");
 }
 
 /** Non-empty JSONL lines in non_matches.jsonl (may exceed dashboard tail). */
 export async function countNonMatchLines(): Promise<number> {
   try {
-    const raw = await readFile(DISCOVERY_NON_MATCHES_PATH, "utf-8");
+    const raw = await readFile(getDiscoveryNonMatchesPath(), "utf-8");
     return raw.split("\n").filter((l) => l.trim()).length;
   } catch {
     return 0;
@@ -87,7 +87,7 @@ function sortNonMatchRowsByFitScoreDesc(rows: DiscoveryNonMatchRow[]): void {
 /** Up to `maxLines` rows, strongest `fit_score` first (full file read for correct order). */
 export async function loadNonMatchesTail(maxLines = 200): Promise<DiscoveryNonMatchRow[]> {
   try {
-    const raw = await readFile(DISCOVERY_NON_MATCHES_PATH, "utf-8");
+    const raw = await readFile(getDiscoveryNonMatchesPath(), "utf-8");
     const lines = raw.split("\n").filter((l) => l.trim());
     const out: DiscoveryNonMatchRow[] = [];
     for (const line of lines) {

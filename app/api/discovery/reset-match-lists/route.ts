@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import { clearAllNewMatches } from "../../../../lib/discovery/matchesStore";
 import { clearAllNonMatches } from "../../../../lib/discovery/nonMatchesStore";
 import { withDiscoverySyncLock } from "../../../../lib/discovery/lock";
@@ -8,7 +9,8 @@ export const dynamic = "force-dynamic";
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" } as const;
 
 /** POST — empties new_matches.jsonl and non_matches.jsonl. */
-export async function POST() {
+export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   try {
     await withDiscoverySyncLock(async () => {
       await Promise.all([clearAllNewMatches(), clearAllNonMatches()]);
@@ -25,4 +27,5 @@ export async function POST() {
     console.error("[discovery/reset-match-lists]", msg);
     return NextResponse.json({ ok: false, error: msg }, { status: 500, headers: NO_STORE });
   }
+  });
 }

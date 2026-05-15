@@ -20,7 +20,10 @@ function applyCors(response: NextResponse, request: NextRequest): NextResponse {
     response.headers.set("Access-Control-Allow-Origin", allowedOrigin);
   }
   response.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  response.headers.set("Access-Control-Allow-Headers", "Content-Type, X-Eliza-Internal");
+  response.headers.set(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Eliza-Internal, X-Eliza-Active-User",
+  );
   response.headers.set("Vary", "Origin");
   return response;
 }

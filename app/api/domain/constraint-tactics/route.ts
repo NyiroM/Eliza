@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import {
   loadConstraintTacticsFromStorage,
   saveConstraintTacticsToStorage,
@@ -17,12 +18,15 @@ function normalizeStance(v: unknown): VetoStance {
 
 type PutBody = { tactics?: unknown };
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const data = await loadConstraintTacticsFromStorage();
   return NextResponse.json(data, { status: 200 });
+  });
 }
 
 export async function PUT(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: PutBody;
   try {
     body = (await request.json()) as PutBody;
@@ -44,4 +48,5 @@ export async function PUT(request: NextRequest) {
   };
   await saveConstraintTacticsToStorage(next);
   return NextResponse.json(next, { status: 200 });
+  });
 }

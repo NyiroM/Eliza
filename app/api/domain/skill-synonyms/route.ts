@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SKILL_SYNONYM_SUGGEST_LIMITS } from "../../../../config/constants";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import {
   loadSkillSynonymsFromStorage,
   saveSkillSynonymsToStorage,
@@ -29,12 +30,15 @@ function sanitizePending(raw: unknown): SkillSynonymPair[] {
   return list.slice(0, SKILL_SYNONYM_SUGGEST_LIMITS.maxPendingStored);
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const data = await loadSkillSynonymsFromStorage();
   return NextResponse.json(data, { status: 200 });
+  });
 }
 
 export async function PUT(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: PutBody;
   try {
     body = (await request.json()) as PutBody;
@@ -54,4 +58,5 @@ export async function PUT(request: NextRequest) {
   };
   await saveSkillSynonymsToStorage(next);
   return NextResponse.json(next, { status: 200 });
+  });
 }

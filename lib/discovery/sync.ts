@@ -93,7 +93,11 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
         pid,
         `${PROVIDER_LOG_LABEL[pid]}: starting fetch (${DISCOVERY_MAX_SEED_PHRASES_EFFECTIVE} seed phrase(s) of ${orderedPhrases.length} in Search keywords)…`,
       );
-      const { jobs, error, hint } = await fetchJobsForProviderResilient(pid, orderedPhrases, 28, {
+      const { jobs, error, hint } = await fetchJobsForProviderResilient(
+        pid,
+        orderedPhrases,
+        28,
+        {
         keywordsInListTotal: orderedPhrases.length,
         onPhrase: async (prov, ev) => {
           if (ev.kind === "start") {
@@ -128,7 +132,9 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
             message: `${PROVIDER_LOG_LABEL[prov]} · finished “${short}” in ${(ev.durationMs / 1000).toFixed(1)}s — ${ev.uniqueCount} unique listing(s) for this source so far · ${ev.keywordsInListTotal} phrase(s) in Search keywords`,
           });
         },
-      });
+      },
+        opts.preferred_location,
+      );
 
       if (error && jobs.length === 0) {
         errors[pid] = error;
@@ -251,13 +257,22 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
     const queue_remaining = await getEvalQueueLength();
     const prevEval = await readDiscoveryProgress();
     const sEval = prevEval.sessionLiveStats ?? defaultSessionLiveStats();
+    const nextJobsEval = sEval.jobsEvaluated + firstPass.jobs_evaluated;
+    const grandTotalFresh = nextJobsEval + queue_remaining;
+    const keepGrand =
+      typeof prevEval.evalSessionGrandTotal === "number" && prevEval.evalSessionGrandTotal > 0
+        ? prevEval.evalSessionGrandTotal
+        : Math.max(1, grandTotalFresh);
     await setDiscoveryProgress({
       sessionLiveStats: {
         ...sEval,
-        jobsEvaluated: sEval.jobsEvaluated + firstPass.jobs_evaluated,
+        jobsEvaluated: nextJobsEval,
         newHighMatches: sEval.newHighMatches + firstPass.new_high_matches,
         queueRemaining: queue_remaining,
       },
+      ...(typeof prevEval.evalSessionGrandTotal !== "number" || prevEval.evalSessionGrandTotal <= 0
+        ? { evalSessionGrandTotal: keepGrand }
+        : {}),
     });
 
     discoveryTerminalLog(

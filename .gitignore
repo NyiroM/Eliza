@@ -41,6 +41,10 @@ yarn-error.log*
 # Vercel
 .vercel
 
+# Python (salary dataset build scripts)
+scripts/__pycache__/
+*.pyc
+
 # Misc
 .DS_Store
 *.pem

@@ -1,9 +1,11 @@
 // lib/storage/constraintTactics.ts
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { requireUserRoot } from "./activeUserContext";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage");
-const CONSTRAINT_TACTICS_PATH = path.join(STORAGE_DIR, "constraint_tactics.json");
+function constraintTacticsPath(): string {
+  return path.join(requireUserRoot(), "constraint_tactics.json");
+}
 
 /** Constraint clash families for veto vs soft scoring. */
 export type ConstraintTacticDomain = "location" | "remote_zone" | "compensation";
@@ -32,7 +34,7 @@ function normalizeStance(v: unknown): VetoStance {
 
 export async function loadConstraintTacticsFromStorage(): Promise<StoredConstraintTactics> {
   try {
-    const content = await readFile(CONSTRAINT_TACTICS_PATH, "utf-8");
+    const content = await readFile(constraintTacticsPath(), "utf-8");
     const parsed = JSON.parse(content) as Partial<StoredConstraintTactics>;
     const raw = parsed.tactics && typeof parsed.tactics === "object" ? parsed.tactics : {};
     const tactics: Partial<Record<ConstraintTacticDomain, VetoStance>> = {};
@@ -51,6 +53,7 @@ export async function loadConstraintTacticsFromStorage(): Promise<StoredConstrai
 }
 
 export async function saveConstraintTacticsToStorage(data: StoredConstraintTactics): Promise<void> {
-  await mkdir(STORAGE_DIR, { recursive: true });
-  await writeFile(CONSTRAINT_TACTICS_PATH, JSON.stringify(data, null, 2), "utf-8");
+  const p = constraintTacticsPath();
+  await mkdir(path.dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(data, null, 2), "utf-8");
 }

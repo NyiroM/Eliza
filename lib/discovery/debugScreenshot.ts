@@ -1,8 +1,14 @@
-// lib/discovery/debugScreenshot.ts — zero-result Playwright captures under storage/debug/.
+// lib/discovery/debugScreenshot.ts — optional Playwright PNG/HTML under <user>/debug/ (off by default).
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { DISCOVERY_DEBUG_DIR } from "./paths";
+import { getDiscoveryDebugDir } from "./paths";
+
+/** Set `ELIZA_DISCOVERY_DEBUG_SCREENSHOTS=1` (or `true`) to write PNG/HTML captures during discovery Playwright runs. */
+function discoveryDebugCapturesEnabled(): boolean {
+  const v = process.env.ELIZA_DISCOVERY_DEBUG_SCREENSHOTS?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
 
 function safeDebugSegment(label: string, maxLen = 80): string {
   return label.replace(/[^a-z0-9_-]+/gi, "_").slice(0, maxLen);
@@ -13,11 +19,12 @@ export async function saveDiscoveryZeroResultScreenshot(
   page: Page,
   label: string,
 ): Promise<void> {
+  if (!discoveryDebugCapturesEnabled()) return;
   try {
-    await mkdir(DISCOVERY_DEBUG_DIR, { recursive: true });
+    await mkdir(getDiscoveryDebugDir(), { recursive: true });
     const safe = safeDebugSegment(label, 60);
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const file = path.join(DISCOVERY_DEBUG_DIR, `${provider}-zero-${ts}-${safe}.png`);
+    const file = path.join(getDiscoveryDebugDir(), `${provider}-zero-${ts}-${safe}.png`);
     await page.screenshot({ path: file, fullPage: true });
     console.warn(`[discovery] Zero-result screenshot: ${file}`);
   } catch (e) {
@@ -31,11 +38,12 @@ export async function saveDiscoveryProgressScreenshot(
   page: Page,
   label: string,
 ): Promise<string | null> {
+  if (!discoveryDebugCapturesEnabled()) return null;
   try {
-    await mkdir(DISCOVERY_DEBUG_DIR, { recursive: true });
+    await mkdir(getDiscoveryDebugDir(), { recursive: true });
     const safe = safeDebugSegment(label, 100);
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const file = path.join(DISCOVERY_DEBUG_DIR, `${provider}-progress-${ts}-${safe}.png`);
+    const file = path.join(getDiscoveryDebugDir(), `${provider}-progress-${ts}-${safe}.png`);
     // Viewport-only: many progress shots per fetch; full-page PNGs dominate wall time.
     await page.screenshot({ path: file, fullPage: false });
     console.warn(`[discovery] Progress screenshot: ${file}`);
@@ -52,11 +60,12 @@ export async function saveDiscoveryDomSnapshot(
   page: Page,
   label: string,
 ): Promise<string | null> {
+  if (!discoveryDebugCapturesEnabled()) return null;
   try {
-    await mkdir(DISCOVERY_DEBUG_DIR, { recursive: true });
+    await mkdir(getDiscoveryDebugDir(), { recursive: true });
     const safe = safeDebugSegment(label, 60);
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const file = path.join(DISCOVERY_DEBUG_DIR, `${provider}-dom-${ts}-${safe}.html`);
+    const file = path.join(getDiscoveryDebugDir(), `${provider}-dom-${ts}-${safe}.html`);
     const html = await page.content();
     await writeFile(file, html, "utf8");
     console.warn(`[discovery] DOM snapshot: ${file}`);

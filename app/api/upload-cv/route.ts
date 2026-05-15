@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../lib/api/withActiveUser";
 import { appendPendingSynonymSuggestions } from "../../../lib/storage/skillSynonyms";
 import { suggestSkillSynonymPairsFromCv } from "../../../lib/skillSynonyms/suggestFromCv";
 import {
@@ -9,7 +10,8 @@ import {
 import { resolveOllamaModel } from "../../../lib/storage/resolveOllamaModel";
 import { validateCvPdfUpload, validateOllamaModelTag } from "../../../lib/validation";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const loaded = await hasStoredCv();
   if (!loaded) {
     return NextResponse.json({ loaded: false }, { status: 200 });
@@ -17,18 +19,22 @@ export async function GET() {
 
   const stored = await loadStoredCvFromStorage();
   const skills = stored?.parsed.skills ?? [];
+  const skill_suggestions = (stored?.skill_suggestions ?? []).filter((r) => r.status === "suggested");
   return NextResponse.json(
     {
       loaded: true,
       uploaded_at: stored?.uploaded_at ?? null,
       skills_count: skills.length,
       skills: skills.slice(0, 200),
+      skill_suggestions,
     },
     { status: 200 },
   );
+  });
 }
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let formData: FormData;
   try {
     formData = await request.formData();
@@ -107,4 +113,5 @@ export async function POST(request: NextRequest) {
     },
     { status: 200 },
   );
+  });
 }

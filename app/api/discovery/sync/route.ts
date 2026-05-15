@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import type { DiscoveryProviderId } from "../../../../types/discovery";
 import { getEvalQueueLength } from "../../../../lib/discovery/evalQueue";
 import {
@@ -33,6 +34,7 @@ type SyncBody = {
 };
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: SyncBody;
   try {
     body = (await request.json()) as SyncBody;
@@ -163,4 +165,5 @@ export async function POST(request: NextRequest) {
     console.error("[discovery/sync]", msg);
     return NextResponse.json({ ok: false, error: msg }, { status: 500, headers: NO_STORE });
   }
+  });
 }

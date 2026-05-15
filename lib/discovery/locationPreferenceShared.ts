@@ -1,0 +1,40 @@
+// lib/discovery/locationPreferenceShared.ts — shared parsing of dashboard target location for job-board URLs.
+
+import { PREFERRED_LOCATION_MAX_CHARS } from "../../config/constants";
+
+/** Country / remote-style labels: do not narrow to a city path or city-shaped Indeed `l=`. */
+export const JOB_BOARD_BROAD_LOCATION_SLUGS = new Set([
+  "hungary",
+  "magyarorszag",
+  "orszag",
+  "country",
+  "worldwide",
+  "remote",
+  "eu",
+  "europe",
+]);
+
+export function firstCommaLocationSegment(preferredLocation: string | null | undefined): string | null {
+  if (preferredLocation == null) return null;
+  const first = preferredLocation.split(",")[0]?.trim() ?? "";
+  return first || null;
+}
+
+export function segmentToLocationSlug(segment: string): string {
+  const deacc = segment.normalize("NFD").replace(/\p{M}+/gu, "");
+  return deacc
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Indeed `l=` (and similar) — default national; first comma segment when it looks like a city/region.
+ */
+export function indeedLocationParamFromPreference(preferredLocation: string | null | undefined): string {
+  const first = firstCommaLocationSegment(preferredLocation);
+  if (!first) return "Hungary";
+  const slug = segmentToLocationSlug(first);
+  if (!slug || JOB_BOARD_BROAD_LOCATION_SLUGS.has(slug)) return "Hungary";
+  return first.slice(0, PREFERRED_LOCATION_MAX_CHARS);
+}

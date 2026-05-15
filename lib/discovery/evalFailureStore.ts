@@ -3,7 +3,7 @@
 // evaluated_ids.json so a Ollama hiccup does not silently drop a posting forever.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { DISCOVERY_FAILURE_COOLDOWN_MS } from "../../config/constants";
-import { DISCOVERY_DIR, DISCOVERY_EVAL_FAILURES_PATH } from "./paths";
+import { getDiscoveryDir, getDiscoveryEvalFailuresPath } from "./paths";
 
 export type EvalFailureRow = {
   id: string;
@@ -16,7 +16,7 @@ type FileShape = { items: EvalFailureRow[] };
 
 async function loadFile(): Promise<EvalFailureRow[]> {
   try {
-    const raw = await readFile(DISCOVERY_EVAL_FAILURES_PATH, "utf-8");
+    const raw = await readFile(getDiscoveryEvalFailuresPath(), "utf-8");
     const parsed = JSON.parse(raw) as FileShape;
     return Array.isArray(parsed.items) ? parsed.items : [];
   } catch {
@@ -25,9 +25,9 @@ async function loadFile(): Promise<EvalFailureRow[]> {
 }
 
 async function saveFile(items: EvalFailureRow[]): Promise<void> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
+  await mkdir(getDiscoveryDir(), { recursive: true });
   const data: FileShape = { items };
-  await writeFile(DISCOVERY_EVAL_FAILURES_PATH, JSON.stringify(data, null, 2), "utf-8");
+  await writeFile(getDiscoveryEvalFailuresPath(), JSON.stringify(data, null, 2), "utf-8");
 }
 
 export async function loadEvalFailureMap(): Promise<Map<string, EvalFailureRow>> {

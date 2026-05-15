@@ -1,6 +1,7 @@
 // lib/discovery/sources/linkedinGuest.ts
 import * as cheerio from "cheerio";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discovery";
+import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
 import { stableJobId } from "../id";
 
 const UA =
@@ -18,7 +19,7 @@ export async function fetchLinkedInGuestJobs(
   base.searchParams.set("f_TPR", "r604800");
   base.searchParams.set("start", "0");
 
-  const res = await fetch(base.toString(), {
+  const res = await timedDiscoveryFetch(base.toString(), {
     headers: {
       "User-Agent": UA,
       Accept: "text/html,application/xhtml+xml",
@@ -28,7 +29,7 @@ export async function fetchLinkedInGuestJobs(
   if (!res.ok) {
     throw new Error(`LinkedIn guest search HTTP ${res.status}`);
   }
-  const html = await res.text();
+  const html = await readDiscoveryResponseText(res);
   const $ = cheerio.load(html);
   const provider: DiscoveryProviderId = "linkedin";
   const out: DiscoveredJob[] = [];
@@ -62,16 +63,22 @@ export async function enrichLinkedInJobDescription(jobUrl: string): Promise<stri
   const id = m?.[1];
   if (!id) return null;
   const detailUrl = `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${id}`;
-  const res = await fetch(detailUrl, {
-    headers: {
-      "User-Agent": UA,
-      Referer: "https://www.linkedin.com/jobs/search/",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
-  if (!res.ok) return null;
-  const html = await res.text();
-  const $ = cheerio.load(html);
-  const markup = $(".show-more-less-html__markup").text().trim();
-  return markup.length > 0 ? markup : null;
+  try {
+    const res = await timedDiscoveryFetch(detailUrl, {
+      headers: {
+        "User-Agent": UA,
+        Referer: "https://www.linkedin.com/jobs/search/",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (!res.ok) return null;
+    const html = await readDiscoveryResponseText(res);
+    const $ = cheerio.load(html);
+    const markup = $(".show-more-less-html__markup").text().trim();
+    return markup.length > 0 ? markup : null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[linkedinGuest] jobPosting enrich failed or timed out", id, msg);
+    return null;
+  }
 }

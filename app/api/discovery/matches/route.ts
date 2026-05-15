@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import { countDiscoveredJobLines } from "../../../../lib/discovery/jobStore";
 import {
   countNewMatchLines,
@@ -20,7 +21,8 @@ const NO_STORE = { "Cache-Control": "no-store, max-age=0" } as const;
 
 const JOB_ID_RE = /^[a-f0-9]{24}$/i;
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const [matches, nonMatches, new_matches_total, non_matches_total, previously_found_jobs_total] = await Promise.all([
     loadNewMatchesTail(100),
     loadNonMatchesTail(100),
@@ -32,11 +34,13 @@ export async function GET() {
     { matches, nonMatches, new_matches_total, non_matches_total, previously_found_jobs_total },
     { headers: NO_STORE },
   );
+  });
 }
 
 type DeleteBody = { job_id?: unknown };
 
 export async function DELETE(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let jobId: string | undefined;
   const q = request.nextUrl.searchParams.get("job_id");
   if (typeof q === "string" && q.trim()) {
@@ -75,4 +79,5 @@ export async function DELETE(request: NextRequest) {
     row ? { id: row.job_id, provider: row.provider, url: row.url } : { id: jobId, provider: "", url: "" },
   );
   return NextResponse.json({ ok: true, removed }, { headers: NO_STORE });
+  });
 }

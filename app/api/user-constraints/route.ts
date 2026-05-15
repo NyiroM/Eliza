@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../lib/api/withActiveUser";
 import {
   addUserConstraint,
   loadUserConstraintsFromStorage,
@@ -9,12 +10,15 @@ type ConstraintRequestBody = {
   constraint?: unknown;
 };
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const data = await loadUserConstraintsFromStorage();
   return NextResponse.json(data, { status: 200 });
+  });
 }
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: ConstraintRequestBody;
   try {
     body = (await request.json()) as ConstraintRequestBody;
@@ -31,9 +35,11 @@ export async function POST(request: NextRequest) {
 
   const saved = await addUserConstraint(body.constraint);
   return NextResponse.json(saved, { status: 200 });
+  });
 }
 
 export async function DELETE(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: ConstraintRequestBody;
   try {
     body = (await request.json()) as ConstraintRequestBody;
@@ -50,4 +56,5 @@ export async function DELETE(request: NextRequest) {
 
   const updated = await removeUserConstraint(body.constraint);
   return NextResponse.json(updated, { status: 200 });
+  });
 }

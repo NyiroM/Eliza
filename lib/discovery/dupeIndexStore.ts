@@ -1,7 +1,7 @@
 // lib/discovery/dupeIndexStore.ts
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../types/discovery";
-import { DISCOVERY_DIR, DISCOVERY_DUPE_INDEX_PATH } from "./paths";
+import { getDiscoveryDir, getDiscoveryDupeIndexPath } from "./paths";
 import {
   computeDupeSignals,
   hammingDistance64Hex,
@@ -46,10 +46,11 @@ export type DupeIndex = {
   save: () => Promise<void>;
 };
 
-export async function loadDupeIndex(filePath = DISCOVERY_DUPE_INDEX_PATH): Promise<DupeIndex> {
+export async function loadDupeIndex(filePath?: string): Promise<DupeIndex> {
+  const resolvedPath = filePath ?? getDiscoveryDupeIndexPath();
   let data: DupeIndexFile = { version: 1, updated_at: nowIso(), buckets: {} };
   try {
-    const raw = await readFile(filePath, "utf-8");
+    const raw = await readFile(resolvedPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<DupeIndexFile>;
     if (parsed && parsed.version === 1 && parsed.buckets && typeof parsed.buckets === "object") {
       data = {
@@ -138,9 +139,9 @@ export async function loadDupeIndex(filePath = DISCOVERY_DUPE_INDEX_PATH): Promi
   }
 
   async function save(): Promise<void> {
-    await mkdir(DISCOVERY_DIR, { recursive: true });
+    await mkdir(getDiscoveryDir(), { recursive: true });
     const next: DupeIndexFile = { version: 1, updated_at: nowIso(), buckets };
-    await writeFile(filePath, JSON.stringify(next, null, 2), "utf-8");
+    await writeFile(resolvedPath, JSON.stringify(next, null, 2), "utf-8");
   }
 
   return { findDuplicate, recordJob, count, save };

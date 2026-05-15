@@ -1,6 +1,8 @@
 // lib/discovery/sources/indeedRss.ts
 import * as cheerio from "cheerio";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discovery";
+import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
+import { indeedLocationParamFromPreference } from "../locationPreferenceShared";
 import { stableJobId } from "../id";
 
 const UA =
@@ -15,27 +17,32 @@ const RSS_HEADERS: Record<string, string> = {
   Connection: "keep-alive",
 };
 
-function buildIndeedRssUrlCandidates(keywords: string): string[] {
+function buildIndeedRssUrlCandidates(keywords: string, preferredLocation?: string | null): string[] {
   const q = keywords.trim() || "developer";
   const enc = encodeURIComponent(q);
+  const l = encodeURIComponent(indeedLocationParamFromPreference(preferredLocation));
   return [
-    `https://rss.indeed.com/rss?q=${enc}&l=Hungary`,
-    `https://www.indeed.com/rss?q=${enc}&l=Hungary`,
+    `https://rss.indeed.com/rss?q=${enc}&l=${l}`,
+    `https://www.indeed.com/rss?q=${enc}&l=${l}`,
     `https://rss.indeed.com/rss?q=${enc}`,
     `https://www.indeed.com/rss?q=${enc}`,
   ];
 }
 
-export async function fetchIndeedRssJobs(keywords: string, maxItems = 25): Promise<DiscoveredJob[]> {
+export async function fetchIndeedRssJobs(
+  keywords: string,
+  maxItems = 25,
+  preferredLocation?: string | null,
+): Promise<DiscoveredJob[]> {
   const q = keywords.trim() || "developer";
-  const urls = buildIndeedRssUrlCandidates(q);
+  const urls = buildIndeedRssUrlCandidates(q, preferredLocation);
   let lastStatus = 0;
   let xml = "";
   for (const url of urls) {
-    const res = await fetch(url, { headers: RSS_HEADERS });
+    const res = await timedDiscoveryFetch(url, { headers: RSS_HEADERS });
     lastStatus = res.status;
     if (res.ok) {
-      xml = await res.text();
+      xml = await readDiscoveryResponseText(res);
       break;
     }
   }

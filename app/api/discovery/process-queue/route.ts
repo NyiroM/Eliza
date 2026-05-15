@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { DISCOVERY_QUEUE_DRAIN_BATCH } from "../../../../config/constants";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import {
   clearDiscoveryProgress,
   defaultSessionLiveStats,
@@ -28,6 +29,7 @@ type Body = {
 };
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: Body;
   try {
     body = (await request.json()) as Body;
@@ -79,6 +81,9 @@ export async function POST(request: NextRequest) {
       markDiscoveryAwaitingDrain(false);
       await clearDiscoveryProgress().catch(() => {});
     } else {
+      // Refresh drain deadline so `isDiscoverySessionBlockingSync` does not expire mid long client drain
+      // (TTL was only extended at initial sync/reevaluate; slow Ollama batches can exceed 10 minutes).
+      markDiscoveryAwaitingDrain(true);
       const prev = await readDiscoveryProgress();
       const s = prev.sessionLiveStats ?? defaultSessionLiveStats();
       await setDiscoveryProgress({
@@ -116,4 +121,5 @@ export async function POST(request: NextRequest) {
     console.error("[discovery/process-queue]", msg);
     return NextResponse.json({ ok: false, error: msg }, { status: 500, headers: NO_STORE });
   }
+  });
 }

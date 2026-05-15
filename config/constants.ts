@@ -13,7 +13,9 @@ export const JOB_TEXT_LIMITS = {
   truncateForTranslation: 6000,
   languagePrepInputMax: 14_000,
   entityExtractionSlice: 16_000,
-  combinedJobForScoring: 20_000,
+  // Reduced from 20_000 to keep the semantic fit prompt (sliced to jobMixChars below) lean —
+  // long Gemma prompts have repeatedly broken JSON output mid-generation (position ~2300–2400).
+  combinedJobForScoring: 12_000,
 } as const;
 
 /** CV text shaping for the semantic scorer (pruning / context window). */
@@ -33,6 +35,14 @@ export const CV_CONTEXT_LIMITS = {
 export const CV_EVIDENCE_PASS_LIMITS = {
   maxMissingSkills: 14,
   cvTextChars: 12_000,
+  /** Max JSON length for CONSTRAINTS array injected into the evidence prompt. */
+  constraintsJsonMaxChars: 4000,
+} as const;
+
+/** Shape USER_SKILL_SYNONYMS in the semantic scorer prompt without mid-JSON truncation. */
+export const SEMANTIC_SCORER_SYNONYM_PROMPT_LIMITS = {
+  maxPairs: 28,
+  maxFieldChars: 80,
 } as const;
 
 /** LLM synonym suggestions after CV upload (pending user approval). */
@@ -40,6 +50,15 @@ export const SKILL_SYNONYM_SUGGEST_LIMITS = {
   maxPairsFromLlm: 16,
   cvTextChars: 10_000,
   maxPendingStored: 48,
+} as const;
+
+/** AI skill phrase suggestions (Analysis; pending until user approves into CV skills list). */
+export const CV_SKILL_SUGGEST_LIMITS = {
+  maxFromLlm: 14,
+  cvTextChars: 10_000,
+  maxPendingStored: 48,
+  maxPhraseChars: 80,
+  maxSkillsStored: 200,
 } as const;
 
 /** API validation (also documented in README). */
@@ -57,11 +76,16 @@ export const SEMANTIC_HIGHLIGHT_LIMITS = {
   returnMax: 5,
 } as const;
 
-/** Truncation for the semantic scorer LLM prompt (token budget). */
+/**
+ * Truncation for the semantic scorer LLM prompt (token budget).
+ * Trimmed from {cvSnippet:3500, jobText:7000, jobMix:3500} after Gemma-family models
+ * truncated JSON output near char ~2300 on long postings — keeps total prompt under
+ * the model's effective context window (Gemma 3 e4b sliding-window base is 8192).
+ */
 export const SEMANTIC_SCORER_PROMPT_LIMITS = {
-  cvSnippetChars: 3500,
-  jobTextChars: 7000,
-  jobMixChars: 3500,
+  cvSnippetChars: 2800,
+  jobTextChars: 5000,
+  jobMixChars: 2800,
 } as const;
 
 /**
@@ -122,6 +146,21 @@ export const DISCOVERY_FAILURE_COOLDOWN_MS = Number.isFinite(_failCooldown)
  * unevaluated rows are not invisible to sync-only queueing.
  */
 export const DISCOVERY_SYNC_BACKLOG_MAX_JOBS = 5000;
+
+/**
+ * HTTP timeout for discovery source fetches (LinkedIn guest, Indeed RSS, Profession list, jobPosting enrich).
+ * Override with `ELIZA_DISCOVERY_HTTP_FETCH_TIMEOUT_MS`, or legacy `ELIZA_LINKEDIN_GUEST_FETCH_TIMEOUT_MS`.
+ */
+const _discHttpMs = parseInt(
+  process.env.ELIZA_DISCOVERY_HTTP_FETCH_TIMEOUT_MS ?? process.env.ELIZA_LINKEDIN_GUEST_FETCH_TIMEOUT_MS ?? "",
+  10,
+);
+export const DISCOVERY_HTTP_FETCH_TIMEOUT_MS = Number.isFinite(_discHttpMs)
+  ? Math.min(120_000, Math.max(8_000, _discHttpMs))
+  : 45_000;
+
+/** @deprecated Use {@link DISCOVERY_HTTP_FETCH_TIMEOUT_MS} (same value). */
+export const LINKEDIN_GUEST_FETCH_TIMEOUT_MS = DISCOVERY_HTTP_FETCH_TIMEOUT_MS;
 
 /** `ollama list` subprocess timeout (ms). */
 export const OLLAMA_LIST_TIMEOUT_MS = 20_000;

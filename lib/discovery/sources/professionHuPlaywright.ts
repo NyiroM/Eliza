@@ -16,13 +16,22 @@ import {
   dismissProfessionHuOverlays,
 } from "./professionHuDialogs";
 import { stableJobId } from "../id";
-import { professionSearchNavigationFailureReason } from "../professionHuUrlValidation";
+import {
+  professionHuLocationSlugFromPreference,
+  professionSearchNavigationFailureReason,
+} from "../professionHuUrlValidation";
 import { nuclearProfessionHuModalClearance } from "./professionHuNuclear";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-const LISTING_ENTRY = "https://www.profession.hu/allasok/1";
+const LISTING_ENTRY_NATIONAL = "https://www.profession.hu/allasok/1";
+
+function professionListingFallbackEntry(preferredLocation: string | null | undefined): string {
+  const slug = professionHuLocationSlugFromPreference(preferredLocation);
+  if (slug) return `https://www.profession.hu/allasok/${slug}/1`;
+  return LISTING_ENTRY_NATIONAL;
+}
 
 /**
  * Hard cap for the entire Profession.hu Playwright fetch (navigation, settle, listing, detail sampling).
@@ -114,23 +123,32 @@ const SEARCH_INPUT_SELECTORS = [
   'input[type="search"]',
 ];
 
-function professionKeywordUrlVariants(keyword: string): string[] {
+function professionKeywordUrlVariants(keyword: string, locationSlug: string | null): string[] {
   const raw = (keyword.trim() || "fejlesztő").normalize("NFC");
-  const u1 = new URL("https://www.profession.hu/allasok/1");
-  u1.searchParams.set("adv_pattern", raw);
-  const u2 = new URL("https://www.profession.hu/allasok");
-  u2.searchParams.set("adv_pattern", raw);
-  const u3 = new URL("https://www.profession.hu/allasok/1");
-  u3.searchParams.set("adv_pattern", raw);
-  u3.searchParams.set("page", "1");
   const e = encodeURIComponent(raw);
-  return [
-    u1.toString(),
-    u2.toString(),
-    u3.toString(),
-    `https://www.profession.hu/allasok/1?keyword=${e}`,
-    `https://www.profession.hu/allasok?keyword=${e}`,
-  ];
+
+  const roots: string[] = [];
+  if (locationSlug) {
+    roots.push(`https://www.profession.hu/allasok/${locationSlug}/1`, `https://www.profession.hu/allasok/${locationSlug}`);
+  }
+  roots.push("https://www.profession.hu/allasok/1", "https://www.profession.hu/allasok");
+
+  const out: string[] = [];
+  for (const root of roots) {
+    const u1 = new URL(root);
+    u1.searchParams.set("adv_pattern", raw);
+    out.push(u1.toString());
+    if (/\/\d+$/.test(new URL(root).pathname)) {
+      const u3 = new URL(root);
+      u3.searchParams.set("adv_pattern", raw);
+      u3.searchParams.set("page", "1");
+      out.push(u3.toString());
+    }
+    const ukw = new URL(root);
+    ukw.searchParams.set("keyword", raw);
+    out.push(ukw.toString());
+  }
+  return [...new Set(out)];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -446,9 +464,11 @@ export async function fetchProfessionHuJobsPlaywright(
   keywords: string,
   maxListings = 20,
   maxDetailVisits = 8,
+  preferredLocation?: string | null,
 ): Promise<DiscoveredJob[]> {
   const listKw = keywords.trim() || "fejlesztő";
-  const urlVariants = professionKeywordUrlVariants(listKw);
+  const locSlug = professionHuLocationSlugFromPreference(preferredLocation);
+  const urlVariants = professionKeywordUrlVariants(listKw, locSlug);
   const provider: DiscoveryProviderId = "profession";
 
   const launchOpts: Parameters<typeof chromium.launch>[0] = {
@@ -534,7 +554,10 @@ export async function fetchProfessionHuJobsPlaywright(
 
       if (!navigationUrlValidated) {
         phLog("Direct URL variants exhausted (URL and/or listing-content checks) — base listing + typed search");
-        await page.goto(LISTING_ENTRY, { waitUntil: "domcontentloaded", timeout: navTimeout });
+        await page.goto(professionListingFallbackEntry(preferredLocation), {
+          waitUntil: "domcontentloaded",
+          timeout: navTimeout,
+        });
         await sleepNav(2400);
         await settleAfterNavigation(page, "fallback-base");
         await performProfessionListingSearch(page, listKw);

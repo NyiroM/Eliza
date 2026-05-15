@@ -23,12 +23,19 @@ Human-oriented overview: **[README.md](./README.md)**. Release history: **[CHANG
 - `npx tsc --noEmit` — typecheck.
 - `npm run build` — production build (run when changing `app/`, `lib/`, or config).
 
-Optional checks: `npm run test:salary-oracle`, `npx tsx scripts/verify-discovery-dedupe.mts`.
+Optional checks: `npm run test:salary-oracle`, `npm run test:location-geography-veto`, `npx tsx scripts/verify-discovery-dedupe.mts`.
 
 ## Local data (never commit)
 
-- **`storage/`** at repo root (gitignored): CV uploads, user JSON, **`storage/discovery/`** (`jobs.jsonl`, `dupe_index.json`, `suppressed_ids.json`, match lists, queue, progress, etc.).
+- **`storage/users/registry.json`** — known profile ids and `defaultUserId`.
+- **`storage/users/<profileId>/`** — per-profile `user_cv.json`, preferences/constraints/corrections JSON, skill synonyms, constraint tactics, and **`discovery/`** (catalog `jobs.jsonl`, `dupe_index.json`, `suppressed_ids.json`, match lists, eval queue, `progress.json`, `settings.json`, debug captures, etc.). Legacy flat `storage/user_cv.json` + `storage/discovery/` migrate once into **`storage/users/default/`** when the registry is first created.
+- **`.cache/cv_parses/<profileId>/`** — optional CV parse cache shards.
 - **`benchmarks/`** — local Ollama tuning output from `npm run benchmark:ollama-tuning`.
+
+## Multi-profile API convention
+
+- Browser code uses **`elizaFetch`** (`lib/elizaFetch.ts`): sets **`X-Eliza-Active-User`** from `localStorage` (`eliza_active_user_id`) on same-origin fetches to user-scoped routes.
+- Route handlers wrap storage/discovery work with **`withActiveUser`** (`lib/api/withActiveUser.ts`) except **`GET`/`POST /api/users`** and **`GET /api/ollama-models`** (those routes do not use `X-Eliza-Active-User`). **`proxy.ts`** still requires **`X-Eliza-Internal: true`** on every **`POST /api/*`** (including `POST /api/users`) so the dashboard and any client must send that header on POSTs.
 
 ## Discovery behavior (high level)
 

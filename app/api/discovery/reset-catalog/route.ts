@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import { clearDiscoveryProgress } from "../../../../lib/discovery/progress";
 import { markDiscoveryAwaitingDrain, withDiscoverySyncLock } from "../../../../lib/discovery/lock";
 import { resetDiscoveryCatalogForDuplicateFilter } from "../../../../lib/discovery/resetDiscoveryCatalog";
@@ -8,7 +9,8 @@ export const dynamic = "force-dynamic";
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" } as const;
 
 /** POST — clears jobs.jsonl, evaluated_ids, eval queue, eval failures, and dupe_index (manual duplicate-filter reset). */
-export async function POST() {
+export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   try {
     const result = await withDiscoverySyncLock(async () => {
       const r = await resetDiscoveryCatalogForDuplicateFilter();
@@ -28,4 +30,5 @@ export async function POST() {
     console.error("[discovery/reset-catalog]", msg);
     return NextResponse.json({ ok: false, error: msg }, { status: 500, headers: NO_STORE });
   }
+  });
 }

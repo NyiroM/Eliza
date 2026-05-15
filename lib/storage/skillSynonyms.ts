@@ -2,9 +2,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SKILL_SYNONYM_SUGGEST_LIMITS } from "../../config/constants";
+import { requireUserRoot } from "./activeUserContext";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage");
-const SKILL_SYNONYMS_PATH = path.join(STORAGE_DIR, "skill_synonyms.json");
+function skillSynonymsPath(): string {
+  return path.join(requireUserRoot(), "skill_synonyms.json");
+}
 
 export type SkillSynonymPair = { from: string; to: string };
 
@@ -41,7 +43,7 @@ function pairKey(from: string, to: string): string {
 
 export async function loadSkillSynonymsFromStorage(): Promise<StoredSkillSynonyms> {
   try {
-    const content = await readFile(SKILL_SYNONYMS_PATH, "utf-8");
+    const content = await readFile(skillSynonymsPath(), "utf-8");
     const parsed = JSON.parse(content) as Partial<StoredSkillSynonyms>;
     const pairs = parsePairList(parsed.pairs);
     const pending_suggestions = parsePairList(parsed.pending_suggestions);
@@ -57,13 +59,14 @@ export async function loadSkillSynonymsFromStorage(): Promise<StoredSkillSynonym
 }
 
 export async function saveSkillSynonymsToStorage(data: StoredSkillSynonyms): Promise<void> {
-  await mkdir(STORAGE_DIR, { recursive: true });
+  const p = skillSynonymsPath();
+  await mkdir(path.dirname(p), { recursive: true });
   const normalized: StoredSkillSynonyms = {
     pairs: data.pairs.slice(0, 200),
     pending_suggestions: data.pending_suggestions.slice(0, SKILL_SYNONYM_SUGGEST_LIMITS.maxPendingStored),
     updated_at: data.updated_at,
   };
-  await writeFile(SKILL_SYNONYMS_PATH, JSON.stringify(normalized, null, 2), "utf-8");
+  await writeFile(p, JSON.stringify(normalized, null, 2), "utf-8");
 }
 
 /** Append new pending suggestions; dedupes against existing pairs and pending. Returns new pending count. */

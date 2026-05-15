@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DiscoveryHubPanel from "@/app/components/DiscoveryHubPanel";
 import JobInputHighlighter from "@/app/components/JobInputHighlighter";
+import { SalaryForecastCard } from "@/app/components/SalaryForecastCard";
 import { DEFAULT_OLLAMA_MODEL } from "@/config/constants";
 import {
   BTN_GHOST,
@@ -11,6 +12,7 @@ import {
   BTN_PRIMARY_COMPACT,
   BTN_PRIMARY_LG,
 } from "@/lib/ui/dashboardButtons";
+import { elizaFetch, persistActiveUserId, getPersistedActiveUserId } from "@/lib/elizaFetch";
 import type { SemanticHighlight } from "@/types/pipeline";
 
 type UploadStatus = {
@@ -19,6 +21,7 @@ type UploadStatus = {
   skills_count?: number;
   /** Normalized skill tokens from the CV parser (GET after upload, or full parse response). */
   skills?: string[];
+  skill_suggestions?: Array<{ phrase: string; status?: string }>;
 };
 
 type ConstraintsState = {
@@ -68,6 +71,7 @@ type PipelineResult = {
     estimated_modus: number;
     match_status: "above_limit" | "borderline" | "below_limit";
     rationale: string;
+    salary_forecast_display?: import("@/types/pipeline").SalaryForecastDisplay;
     source: "posted" | "market_benchmark";
     currency: "USD" | "EUR" | "GBP" | "HUF" | "PLN" | "JPY";
     base_salary: {
@@ -98,6 +102,8 @@ type PipelineResult = {
 };
 
 type SynonymRow = { from: string; to: string };
+
+type RegistryUserRow = { id: string; displayName: string; createdAt: string };
 
 function dedupeSynonymPairs(rows: SynonymRow[]): SynonymRow[] {
   const seen = new Set<string>();
@@ -167,6 +173,13 @@ function jobSourceBadgeLabel(source?: PipelineResult["job_source"]): string {
 }
 
 export default function DashboardPage() {
+  const [registryUsers, setRegistryUsers] = useState<RegistryUserRow[]>([]);
+  const [activeUserId, setActiveUserId] = useState("");
+  const [newUserDisplayName, setNewUserDisplayName] = useState("");
+  const [newUserBusy, setNewUserBusy] = useState(false);
+  const [showNewUserRow, setShowNewUserRow] = useState(false);
+  /** Shown under the header so profile actions are visible on every tab (not only Analysis body). */
+  const [profileNotice, setProfileNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [activeTab, setActiveTab] = useState<"analysis" | "discovery">("analysis");
   const [status, setStatus] = useState<UploadStatus>({ loaded: false });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -174,6 +187,11 @@ export default function DashboardPage() {
   const [refineText, setRefineText] = useState("");
   const [result, setResult] = useState<PipelineResult | null>(null);
   const [loadingUpload, setLoadingUpload] = useState(false);
+  const [skillsDraft, setSkillsDraft] = useState("");
+  const [skillsSaveBusy, setSkillsSaveBusy] = useState(false);
+  const [skillSuggestBusy, setSkillSuggestBusy] = useState(false);
+  const [skillPhraseReviewBusy, setSkillPhraseReviewBusy] = useState(false);
+  const [lastSkillSuggestRationale, setLastSkillSuggestRationale] = useState<string | null>(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
   const [constraintsBusy, setConstraintsBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -225,7 +243,7 @@ export default function DashboardPage() {
     try {
       const [modelsRes, prefsRes] = await Promise.all([
         fetch("/api/ollama-models"),
-        fetch("/api/user-preferences"),
+        elizaFetch("/api/user-preferences"),
       ]);
       const md = (await modelsRes.json()) as {
         models?: string[];
@@ -259,7 +277,7 @@ export default function DashboardPage() {
             : list[0];
       setSelectedModel(nextModel);
       if (!saved || saved !== nextModel) {
-        void fetch("/api/user-preferences", {
+        void elizaFetch("/api/user-preferences", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
           body: JSON.stringify({ ollama_model: nextModel }),
@@ -276,24 +294,151 @@ export default function DashboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    const timerId = window.setTimeout(() => {
-      void loadUserPrefsAndOllamaModels();
-    }, 0);
-    return () => {
-      window.clearTimeout(timerId);
-    };
-  }, [loadUserPrefsAndOllamaModels]);
-
-  useEffect(() => {
-    void checkCvStatus();
+  const checkCvStatus = useCallback(async () => {
+    setMessage("");
+    try {
+      const response = await elizaFetch("/api/upload-cv");
+      const data = (await response.json()) as UploadStatus & {
+        skills?: string[];
+        skill_suggestions?: Array<{ phrase: string; status?: string }>;
+      };
+      const skills = Array.isArray(data.skills) ? data.skills : [];
+      setStatus({
+        loaded: data.loaded,
+        uploaded_at: data.uploaded_at,
+        skills_count: data.skills_count,
+        skills,
+        skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : [],
+      });
+      if (data.loaded) {
+        setSkillsDraft(skills.join(", "));
+      } else {
+        setSkillsDraft("");
+      }
+    } catch {
+      setMessage("Unable to check CV status.");
+    }
   }, []);
+
+  async function saveCvSkillsDraft() {
+    if (!status.loaded || skillsSaveBusy) return;
+    setSkillsSaveBusy(true);
+    setMessage("");
+    try {
+      const res = await elizaFetch("/api/upload-cv/skills", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({ skills_text: skillsDraft, model: selectedModel }),
+      });
+      const data = (await res.json()) as UploadStatus & {
+        error?: string;
+        skills?: string[];
+        skill_suggestions?: Array<{ phrase: string }>;
+      };
+      if (!res.ok) {
+        setMessage(data.error ?? "Could not save skills.");
+        return;
+      }
+      const skills = Array.isArray(data.skills) ? data.skills : [];
+      setStatus((prev) => ({
+        ...prev,
+        loaded: true,
+        skills,
+        skills_count: data.skills_count ?? skills.length,
+        skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : prev.skill_suggestions,
+      }));
+      setSkillsDraft(skills.join(", "));
+      setMessage("CV skills saved.");
+    } catch {
+      setMessage("Could not save skills.");
+    } finally {
+      setSkillsSaveBusy(false);
+    }
+  }
+
+  async function suggestCvSkillPhrases() {
+    if (!status.loaded || skillSuggestBusy) return;
+    setSkillSuggestBusy(true);
+    setLastSkillSuggestRationale(null);
+    setMessage("");
+    try {
+      const res = await elizaFetch("/api/upload-cv/suggest-skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({ model: selectedModel }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        skills?: string[];
+        skills_count?: number;
+        skill_suggestions?: Array<{ phrase: string }>;
+        suggest_rationale?: string | null;
+      };
+      if (!res.ok) {
+        setMessage(data.error ?? "Suggestion request failed.");
+        return;
+      }
+      const skills = Array.isArray(data.skills) ? data.skills : [];
+      setStatus((prev) => ({
+        ...prev,
+        loaded: true,
+        skills,
+        skills_count: typeof data.skills_count === "number" ? data.skills_count : skills.length,
+        skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : prev.skill_suggestions,
+      }));
+      if (typeof data.suggest_rationale === "string" && data.suggest_rationale.trim()) {
+        setLastSkillSuggestRationale(data.suggest_rationale.trim());
+      }
+      setMessage("New skill suggestions added — review below.");
+    } catch {
+      setMessage("Could not reach suggest-skills API.");
+    } finally {
+      setSkillSuggestBusy(false);
+    }
+  }
+
+  async function postSkillSuggestionAction(body: Record<string, unknown>, okMsg: string) {
+    if (!status.loaded || skillPhraseReviewBusy) return;
+    setSkillPhraseReviewBusy(true);
+    setDomainSettingsMessage(null);
+    try {
+      const res = await elizaFetch("/api/upload-cv/skill-suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({ ...body, model: selectedModel }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        skills?: string[];
+        skills_count?: number;
+        skill_suggestions?: Array<{ phrase: string }>;
+      };
+      if (!res.ok) {
+        setMessage(data.error ?? "Skill suggestion update failed.");
+        return;
+      }
+      const skills = Array.isArray(data.skills) ? data.skills : [];
+      setStatus((prev) => ({
+        ...prev,
+        loaded: true,
+        skills,
+        skills_count: typeof data.skills_count === "number" ? data.skills_count : skills.length,
+        skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : [],
+      }));
+      setSkillsDraft(skills.join(", "));
+      setMessage(okMsg);
+    } catch {
+      setMessage("Could not reach skill-suggestions API.");
+    } finally {
+      setSkillPhraseReviewBusy(false);
+    }
+  }
 
   async function savePreferredLocation() {
     setPrefsLocationBusy(true);
     setMessage("");
     try {
-      const response = await fetch("/api/user-preferences", {
+      const response = await elizaFetch("/api/user-preferences", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ preferred_location: targetLocation.trim() || null }),
@@ -316,22 +461,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function checkCvStatus() {
-    setMessage("");
-    try {
-      const response = await fetch("/api/upload-cv");
-      const data = (await response.json()) as UploadStatus & { skills?: string[] };
-      setStatus({
-        loaded: data.loaded,
-        uploaded_at: data.uploaded_at,
-        skills_count: data.skills_count,
-        skills: Array.isArray(data.skills) ? data.skills : undefined,
-      });
-    } catch {
-      setMessage("Unable to check CV status.");
-    }
-  }
-
   async function uploadCv() {
     if (!selectedFile) {
       setMessage("Please choose a PDF CV first.");
@@ -346,7 +475,7 @@ export default function DashboardPage() {
       formData.append("file", selectedFile);
       formData.append("model", selectedModel);
 
-      const response = await fetch("/api/upload-cv", {
+      const response = await elizaFetch("/api/upload-cv", {
         method: "POST",
         headers: { "X-Eliza-Internal": "true" },
         body: formData,
@@ -383,6 +512,7 @@ export default function DashboardPage() {
         at: typeof data.uploaded_at === "string" ? data.uploaded_at : new Date().toISOString(),
         addedRowCount: added,
       });
+      setLastSkillSuggestRationale(null);
 
       if (data.synonym_suggestions_error) {
         setMessage(
@@ -394,11 +524,11 @@ export default function DashboardPage() {
         );
       } else if (added > 0) {
         setMessage(
-          `CV uploaded and parsed. ${added} new synonym suggestion row(s) added (${pendingTot} total pending below — review and accept or dismiss).`,
+          `CV uploaded and parsed. ${added} new synonym suggestion row(s) added (${pendingTot} total pending — open CV skills & tuning → Skill synonyms (advanced) to review).`,
         );
       } else {
         setMessage(
-          `CV uploaded and parsed. The model proposed ${proposed.length} synonym mapping(s); all were already saved or pending — see “CV skills & synonym review” below.`,
+          `CV uploaded and parsed. The model proposed ${proposed.length} synonym mapping(s); all were already saved or pending — see CV skills & tuning → Skill synonyms (advanced).`,
         );
       }
 
@@ -417,7 +547,7 @@ export default function DashboardPage() {
   const loadConstraints = useCallback(async () => {
     setConstraintsBusy(true);
     try {
-      const response = await fetch("/api/user-constraints");
+      const response = await elizaFetch("/api/user-constraints");
       const data = (await response.json()) as ConstraintsState;
       setConstraints({
         constraints: data.constraints ?? [],
@@ -435,8 +565,8 @@ export default function DashboardPage() {
     setDomainSettingsMessage(null);
     try {
       const [synRes, tacRes] = await Promise.all([
-        fetch("/api/domain/skill-synonyms"),
-        fetch("/api/domain/constraint-tactics"),
+        elizaFetch("/api/domain/skill-synonyms"),
+        elizaFetch("/api/domain/constraint-tactics"),
       ]);
       const synData = (await synRes.json()) as {
         pairs?: Array<{ from: string; to: string }>;
@@ -474,19 +604,117 @@ export default function DashboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      void loadConstraints();
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [loadConstraints]);
+  const reloadForActiveProfile = useCallback(async () => {
+    await loadUserPrefsAndOllamaModels();
+    await checkCvStatus();
+    await loadConstraints();
+    await loadDomainSettings();
+  }, [loadUserPrefsAndOllamaModels, checkCvStatus, loadConstraints, loadDomainSettings]);
 
   useEffect(() => {
-    const id = window.setTimeout(() => {
-      void loadDomainSettings();
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [loadDomainSettings]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const ur = await fetch("/api/users");
+        const reg = (await ur.json()) as {
+          users?: RegistryUserRow[];
+          defaultUserId?: string;
+        };
+        const users = Array.isArray(reg.users) ? reg.users : [];
+        const def =
+          typeof reg.defaultUserId === "string" && reg.defaultUserId.trim()
+            ? reg.defaultUserId.trim()
+            : "default";
+        const stored = getPersistedActiveUserId();
+        const nextId = stored && users.some((u) => u.id === stored) ? stored : def;
+        persistActiveUserId(nextId);
+        if (cancelled) return;
+        setRegistryUsers(users);
+        setActiveUserId(nextId);
+        await loadUserPrefsAndOllamaModels();
+        await checkCvStatus();
+        await loadConstraints();
+        await loadDomainSettings();
+      } catch {
+        if (!cancelled) setMessage("Could not load user registry or profile data.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadUserPrefsAndOllamaModels, checkCvStatus, loadConstraints, loadDomainSettings]);
+
+  async function createProfileFromName() {
+    const displayName = newUserDisplayName.trim();
+    if (!displayName || newUserBusy) return;
+    setNewUserBusy(true);
+    setMessage("");
+    setProfileNotice(null);
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Eliza-Internal": "true",
+        },
+        body: JSON.stringify({ displayName }),
+        cache: "no-store",
+      });
+      let data: { id?: string; user?: RegistryUserRow; error?: string };
+      try {
+        data = (await res.json()) as { id?: string; user?: RegistryUserRow; error?: string };
+      } catch {
+        setProfileNotice({
+          kind: "err",
+          text: "Invalid server response (not JSON). Check the terminal for API errors.",
+        });
+        return;
+      }
+      if (!res.ok) {
+        const errText = data.error ?? `Could not create profile (${res.status}).`;
+        setProfileNotice({ kind: "err", text: errText });
+        setMessage(errText);
+        return;
+      }
+      const id = typeof data.id === "string" ? data.id : data.user?.id;
+      if (!id) {
+        const errText = "Invalid server response: missing profile id.";
+        setProfileNotice({ kind: "err", text: errText });
+        setMessage(errText);
+        return;
+      }
+      persistActiveUserId(id);
+      setActiveUserId(id);
+      setRegistryUsers((prev) => {
+        const row = data.user ?? { id, displayName, createdAt: new Date().toISOString() };
+        if (prev.some((u) => u.id === row.id)) return prev;
+        return [...prev, row];
+      });
+      setResult(null);
+      try {
+        await reloadForActiveProfile();
+      } catch (reloadErr) {
+        const msg =
+          reloadErr instanceof Error
+            ? reloadErr.message
+            : "Profile was created but reloading settings failed. Refresh the page.";
+        setProfileNotice({ kind: "err", text: msg });
+        setMessage(msg);
+        return;
+      }
+      setNewUserDisplayName("");
+      setShowNewUserRow(false);
+      const okText = `Új profil aktív: ${id}`;
+      setProfileNotice({ kind: "ok", text: okText });
+      setMessage(okText);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not create profile.";
+      setProfileNotice({ kind: "err", text: msg });
+      setMessage(msg);
+    } finally {
+      setNewUserBusy(false);
+    }
+  }
 
   const runAnalysis = useCallback(async () => {
     if (!status.loaded) {
@@ -507,7 +735,7 @@ export default function DashboardPage() {
     }, 1800);
 
     try {
-      const response = await fetch(`/api/pipeline?t=${Date.now()}`, {
+      const response = await elizaFetch(`/api/pipeline?t=${Date.now()}`, {
         method: "POST",
         cache: "no-store",
         headers: {
@@ -559,7 +787,7 @@ export default function DashboardPage() {
     setCorrectionBusy(true);
     setCorrectionMessage(null);
     try {
-      const res = await fetch("/api/corrections", {
+      const res = await elizaFetch("/api/corrections", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ correction: text }),
@@ -586,7 +814,7 @@ export default function DashboardPage() {
     setLoadingAssets(true);
     setMessage("");
     try {
-      const response = await fetch("/api/generate-assets", {
+      const response = await elizaFetch("/api/generate-assets", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({
@@ -623,7 +851,7 @@ export default function DashboardPage() {
     }
     setMessage("");
     try {
-      const response = await fetch("/api/user-constraints", {
+      const response = await elizaFetch("/api/user-constraints", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ constraint: refineText }),
@@ -646,7 +874,7 @@ export default function DashboardPage() {
   async function deleteConstraint(item: string) {
     setConstraintsBusy(true);
     try {
-      const response = await fetch("/api/user-constraints", {
+      const response = await elizaFetch("/api/user-constraints", {
         method: "DELETE",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ constraint: item }),
@@ -681,7 +909,7 @@ export default function DashboardPage() {
       const pending_suggestions = pendingIn
         .map((p) => ({ from: p.from.trim(), to: p.to.trim() }))
         .filter((p) => p.from && p.to);
-      const response = await fetch("/api/domain/skill-synonyms", {
+      const response = await elizaFetch("/api/domain/skill-synonyms", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ pairs, pending_suggestions }),
@@ -752,7 +980,7 @@ export default function DashboardPage() {
         remote_zone: tacticRemoteZone,
         compensation: tacticCompensation,
       };
-      const response = await fetch("/api/domain/constraint-tactics", {
+      const response = await elizaFetch("/api/domain/constraint-tactics", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
         body: JSON.stringify({ tactics }),
@@ -787,9 +1015,96 @@ export default function DashboardPage() {
     <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6">
       <div className="mx-auto max-w-7xl space-y-8">
         <header className="space-y-4">
-          <div>
+          <div className="flex flex-wrap items-end justify-between gap-4">
             <h1 className="text-2xl font-semibold tracking-tight">ELIZA Dashboard</h1>
+            <div className="flex w-full max-w-xl flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-end sm:justify-end">
+              <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-slate-400 sm:min-w-[11rem]">
+                <span className="font-medium uppercase tracking-wide">Active profile</span>
+                <select
+                  value={activeUserId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    persistActiveUserId(id);
+                    setActiveUserId(id);
+                    setResult(null);
+                    setMessage("");
+                    setProfileNotice(null);
+                    void reloadForActiveProfile();
+                  }}
+                  disabled={registryUsers.length === 0}
+                  className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+                >
+                  {registryUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.displayName} ({u.id})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!showNewUserRow ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileNotice(null);
+                    setShowNewUserRow(true);
+                  }}
+                  className={BTN_GHOST_SM}
+                >
+                  + New profile
+                </button>
+              ) : (
+                <form
+                  className="flex flex-wrap items-end gap-2"
+                  onSubmit={(ev) => {
+                    ev.preventDefault();
+                    void createProfileFromName();
+                  }}
+                >
+                  <label className="flex flex-col gap-1 text-xs text-slate-400">
+                    <span className="font-medium uppercase tracking-wide">Display name</span>
+                    <input
+                      value={newUserDisplayName}
+                      onChange={(ev) => setNewUserDisplayName(ev.target.value)}
+                      placeholder="e.g. Anna"
+                      autoComplete="off"
+                      className="min-w-[8rem] rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={newUserBusy || !newUserDisplayName.trim()}
+                    className={BTN_PRIMARY_COMPACT}
+                  >
+                    {newUserBusy ? "Creating…" : "Create"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={newUserBusy}
+                    onClick={() => {
+                      setShowNewUserRow(false);
+                      setNewUserDisplayName("");
+                      setProfileNotice(null);
+                    }}
+                    className={BTN_GHOST_SM}
+                  >
+                    Cancel
+                  </button>
+                </form>
+              )}
+            </div>
           </div>
+          {profileNotice ? (
+            <p
+              role="status"
+              className={
+                profileNotice.kind === "ok"
+                  ? "text-sm text-emerald-300/95"
+                  : "text-sm text-amber-300"
+              }
+            >
+              {profileNotice.text}
+            </p>
+          ) : null}
           <nav className="flex flex-wrap gap-2 border-b border-slate-800 pb-2" aria-label="Dashboard sections">
             <button
               type="button"
@@ -818,6 +1133,7 @@ export default function DashboardPage() {
 
         {activeTab === "discovery" ? (
           <DiscoveryHubPanel
+            key={activeUserId || "no-user"}
             selectedModel={selectedModel}
             preferredLocation={targetLocation}
             cvLoaded={status.loaded}
@@ -881,32 +1197,39 @@ export default function DashboardPage() {
               >
                 <div>
                   <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-200/90">
-                    CV skills &amp; synonym review
+                    CV skills &amp; tuning
                   </h2>
                   <p className="mt-1 text-xs text-slate-400">
-                    <span className="font-medium text-slate-300">Skills</span> come from the CV parser
-                    (normalized tokens). <span className="font-medium text-slate-300">Synonym rows</span> are
-                    extra alias → canonical mappings the model suggests for job matching; they are not applied
-                    until you accept them.
+                    <span className="font-medium text-slate-300">Skills</span> are loaded from the CV parser;
+                    edit the comma-separated list and save. <span className="font-medium text-slate-300">
+                      Suggested skills (AI)
+                    </span>{" "}
+                    are optional additions — approve to merge into the list above (same pattern as Discovery search
+                    keywords). <span className="font-medium text-slate-300">Skill synonyms</span> (advanced) are
+                    alias → canonical rows for ATS matching.
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <h3 className="text-xs font-medium text-slate-300">Skills extracted from your CV</h3>
-                  <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-slate-700 bg-slate-950/60 p-2">
-                    {(status.skills ?? []).length === 0 ? (
-                      <span className="text-xs text-slate-500">No skills in the parsed CV payload.</span>
-                    ) : (
-                      (status.skills ?? []).map((s) => (
-                        <span
-                          key={s}
-                          className="rounded-full border border-sky-800/60 bg-sky-950/50 px-2 py-0.5 text-xs text-sky-100"
-                        >
-                          {s}
-                        </span>
-                      ))
-                    )}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-medium text-slate-300">Skills (comma-separated)</h3>
+                    <button
+                      type="button"
+                      disabled={skillsSaveBusy || skillSuggestBusy || skillPhraseReviewBusy}
+                      onClick={() => void saveCvSkillsDraft()}
+                      className={BTN_PRIMARY_COMPACT}
+                    >
+                      {skillsSaveBusy ? "Saving…" : "Save skills"}
+                    </button>
                   </div>
+                  <textarea
+                    id="cv-skills-draft"
+                    rows={4}
+                    value={skillsDraft}
+                    onChange={(e) => setSkillsDraft(e.target.value)}
+                    placeholder="e.g. react, node.js, typescript, postgres"
+                    className="w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 font-mono text-xs text-slate-100 placeholder:text-slate-600"
+                  />
                   {typeof status.skills_count === "number" && status.skills_count > (status.skills ?? []).length ? (
                     <p className="text-[11px] text-slate-500">
                       Showing {(status.skills ?? []).length} of {status.skills_count} skills (list truncated in
@@ -915,68 +1238,105 @@ export default function DashboardPage() {
                   ) : null}
                 </div>
 
-                <div className="space-y-2 border-t border-slate-800 pt-3">
-                  <h3 className="text-xs font-medium text-slate-300">AI-suggested synonym mappings</h3>
-                  {skillSynonymPending.length > 0 ? (
-                    <ul className="space-y-2">
-                      {skillSynonymPending.map((row, idx) => (
-                        <li
-                          key={`review-pending-${idx}-${row.from}-${row.to}`}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-800/45 bg-amber-950/20 px-3 py-2"
-                        >
-                          <div className="min-w-0 flex-1 text-sm">
-                            <span className="font-mono text-amber-100/95">{row.from}</span>
-                            <span className="mx-2 text-amber-600/80">→</span>
-                            <span className="font-mono text-emerald-200/90">{row.to}</span>
-                          </div>
-                          <div className="flex shrink-0 gap-2">
-                <button
-                  type="button"
-                  disabled={domainSettingsBusy}
-                  title="Accept and save as a saved synonym"
-                  className={BTN_PRIMARY_COMPACT}
-                  onClick={() => void approvePendingSynonymRow(idx)}
-                >
-                  Accept
-                </button>
-                <button
-                  type="button"
-                  disabled={domainSettingsBusy}
-                  title="Dismiss this suggestion"
-                  className={BTN_GHOST_SM}
-                  onClick={() => void dismissPendingSynonymRow(idx)}
-                >
-                  Dismiss
-                </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Suggested skills (AI)
+                    </h3>
+                    <button
+                      type="button"
+                      disabled={skillSuggestBusy || skillsSaveBusy || domainSettingsBusy}
+                      onClick={() => void suggestCvSkillPhrases()}
+                      className={BTN_GHOST_SM}
+                    >
+                      {skillSuggestBusy ? "Generating…" : "Generate suggestions"}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Suggestions start as pending. Approving appends the phrase to the skills field above
+                    (deduped).
+                  </p>
+                  {(status.skill_suggestions ?? []).filter((s) => s.status === "suggested" || !s.status).length ===
+                  0 ? (
+                    <p className="text-xs text-slate-600">No pending skill suggestions.</p>
                   ) : (
-                    <p className="text-xs text-slate-500">
-                      No pending synonym rows. They appear here after a CV upload when the model proposes new
-                      pairs.
-                    </p>
+                    <ul className="space-y-2">
+                      {(status.skill_suggestions ?? [])
+                        .filter((s) => s.status === "suggested" || !s.status)
+                        .map((row) => (
+                          <li
+                            key={`skill-sug-${row.phrase}`}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-violet-900/40 bg-violet-950/20 px-3 py-2"
+                          >
+                            <span className="min-w-0 flex-1 font-mono text-sm text-violet-100/95">{row.phrase}</span>
+                            <div className="flex shrink-0 gap-2">
+                              <button
+                                type="button"
+                                disabled={skillPhraseReviewBusy}
+                                className={BTN_PRIMARY_COMPACT}
+                                onClick={() =>
+                                  void postSkillSuggestionAction(
+                                    { action: "approve", phrase: row.phrase },
+                                    `Approved skill «${row.phrase}».`,
+                                  )
+                                }
+                              >
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                disabled={skillPhraseReviewBusy}
+                                className={BTN_GHOST_SM}
+                                onClick={() =>
+                                  void postSkillSuggestionAction(
+                                    { action: "reject", phrase: row.phrase },
+                                    "Suggestion dismissed.",
+                                  )
+                                }
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                    </ul>
                   )}
-                  {skillSynonymPending.length > 1 ? (
+                  {(status.skill_suggestions ?? []).filter((s) => s.status === "suggested" || !s.status).length >
+                  1 ? (
                     <div className="flex flex-wrap gap-2 pt-1">
                       <button
                         type="button"
-                        disabled={domainSettingsBusy}
+                        disabled={skillPhraseReviewBusy}
                         className={BTN_PRIMARY_COMPACT}
-                        onClick={() => void approveAllPendingSynonyms()}
+                        onClick={() =>
+                          void postSkillSuggestionAction(
+                            { action: "approve_all_skill_phrases" },
+                            "All pending skill suggestions approved.",
+                          )
+                        }
                       >
                         Accept all
                       </button>
                       <button
                         type="button"
-                        disabled={domainSettingsBusy}
+                        disabled={skillPhraseReviewBusy}
                         className={BTN_GHOST_SM}
-                        onClick={() => void dismissAllPendingSynonyms()}
+                        onClick={() =>
+                          void postSkillSuggestionAction(
+                            { action: "reject_all_skill_phrases" },
+                            "All pending skill suggestions dismissed.",
+                          )
+                        }
                       >
                         Dismiss all
                       </button>
                     </div>
+                  ) : null}
+                  {lastSkillSuggestRationale ? (
+                    <p className="text-xs text-slate-500">
+                      <span className="font-medium text-slate-400">Model note: </span>
+                      {lastSkillSuggestRationale}
+                    </p>
                   ) : null}
                 </div>
 
@@ -988,7 +1348,7 @@ export default function DashboardPage() {
                 ) : null}
                 {synonymReviewLastUpload?.rationale ? (
                   <p className="text-xs text-slate-500">
-                    <span className="font-medium text-slate-400">Model note: </span>
+                    <span className="font-medium text-slate-400">Synonym model note (upload): </span>
                     {synonymReviewLastUpload.rationale}
                   </p>
                 ) : null}
@@ -997,7 +1357,7 @@ export default function DashboardPage() {
                 synonymReviewLastUpload.addedRowCount === 0 &&
                 !synonymReviewLastUpload.modelFailed ? (
                   <div className="rounded-md border border-slate-700 bg-slate-950/50 p-2 text-xs text-slate-400">
-                    <p className="mb-1 font-medium text-slate-300">Latest model proposals (this upload)</p>
+                    <p className="mb-1 font-medium text-slate-300">Latest synonym proposals (this upload)</p>
                     <p className="mb-2 text-slate-500">
                       The model returned these pairs, but none were added as new pending rows (they likely match
                       skills already on file or duplicate pending/saved mappings).
@@ -1012,10 +1372,151 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
-                <p className="text-[11px] text-slate-600">
-                  Advanced: edit rows manually in{" "}
-                  <span className="text-slate-400">Domain &amp; CV tuning → Skill synonyms</span> below.
-                </p>
+                <details className="rounded-md border border-slate-800 bg-slate-950/40 p-2 text-xs text-slate-400">
+                  <summary className="cursor-pointer select-none text-sm font-medium text-slate-300">
+                    Skill synonyms (advanced)
+                  </summary>
+                  <p className="mt-2 mb-3 text-[11px] text-slate-500">
+                    Alias → canonical mappings for job matching. Pending rows from CV upload appear here; use
+                    Accept/Dismiss or edit saved rows and Save synonyms.
+                  </p>
+
+                  <div className="space-y-2 border-t border-slate-800 pt-3">
+                    <h4 className="text-xs font-medium text-slate-300">AI-suggested synonym mappings</h4>
+                    {skillSynonymPending.length > 0 ? (
+                      <ul className="space-y-2">
+                        {skillSynonymPending.map((row, idx) => (
+                          <li
+                            key={`review-pending-${idx}-${row.from}-${row.to}`}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-800/45 bg-amber-950/20 px-3 py-2"
+                          >
+                            <div className="min-w-0 flex-1 text-sm">
+                              <span className="font-mono text-amber-100/95">{row.from}</span>
+                              <span className="mx-2 text-amber-600/80">→</span>
+                              <span className="font-mono text-emerald-200/90">{row.to}</span>
+                            </div>
+                            <div className="flex shrink-0 gap-2">
+                              <button
+                                type="button"
+                                disabled={domainSettingsBusy}
+                                title="Accept and save as a saved synonym"
+                                className={BTN_PRIMARY_COMPACT}
+                                onClick={() => void approvePendingSynonymRow(idx)}
+                              >
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                disabled={domainSettingsBusy}
+                                title="Dismiss this suggestion"
+                                className={BTN_GHOST_SM}
+                                onClick={() => void dismissPendingSynonymRow(idx)}
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-slate-500">
+                        No pending synonym rows. They appear after a CV upload when the model proposes new pairs.
+                      </p>
+                    )}
+                    {skillSynonymPending.length > 1 ? (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={domainSettingsBusy}
+                          className={BTN_PRIMARY_COMPACT}
+                          onClick={() => void approveAllPendingSynonyms()}
+                        >
+                          Accept all
+                        </button>
+                        <button
+                          type="button"
+                          disabled={domainSettingsBusy}
+                          className={BTN_GHOST_SM}
+                          onClick={() => void dismissAllPendingSynonyms()}
+                        >
+                          Dismiss all
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2 border-t border-slate-800 pt-3 mt-3">
+                    <h4 className="text-xs font-medium text-slate-300">Saved &amp; editable synonym rows</h4>
+                    <div className="space-y-2 max-h-64 overflow-auto pr-1">
+                      {skillSynonymPairs.length === 0 ? (
+                        <p className="text-xs text-slate-500">
+                          No saved synonym rows yet — use Add row or accept a suggestion above.
+                        </p>
+                      ) : null}
+                      {skillSynonymPairs.map((row, idx) => (
+                        <div key={`pair-${idx}`} className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="text"
+                            value={row.from}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSkillSynonymPairs((prev) =>
+                                prev.map((p, i) => (i === idx ? { ...p, from: v } : p)),
+                              );
+                            }}
+                            placeholder="alias (e.g. react.js)"
+                            className="min-w-[8rem] flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                          />
+                          <span className="text-slate-500">→</span>
+                          <input
+                            type="text"
+                            value={row.to}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSkillSynonymPairs((prev) =>
+                                prev.map((p, i) => (i === idx ? { ...p, to: v } : p)),
+                              );
+                            }}
+                            placeholder="canonical (e.g. react)"
+                            className="min-w-[8rem] flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                          />
+                          <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                            Saved
+                          </span>
+                          <button
+                            type="button"
+                            className={BTN_GHOST_SM}
+                            onClick={() =>
+                              setSkillSynonymPairs((prev) => prev.filter((_, i) => i !== idx))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={BTN_GHOST_SM}
+                        onClick={() => setSkillSynonymPairs((prev) => [...prev, { from: "", to: "" }])}
+                      >
+                        Add row
+                      </button>
+                      <button
+                        type="button"
+                        disabled={domainSettingsBusy}
+                        onClick={() => void saveSkillSynonymsToApi()}
+                        className={BTN_PRIMARY_COMPACT}
+                      >
+                        Save synonyms
+                      </button>
+                    </div>
+                    {synonymsUpdatedAt ? (
+                      <p className="text-xs text-slate-500">Synonyms file updated: {synonymsUpdatedAt}</p>
+                    ) : null}
+                  </div>
+                </details>
               </section>
             ) : null}
 
@@ -1069,7 +1570,7 @@ export default function DashboardPage() {
               onChange={(event) => {
                 const v = event.target.value;
                 setSelectedModel(v);
-                void fetch("/api/user-preferences", {
+                void elizaFetch("/api/user-preferences", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
                   body: JSON.stringify({ ollama_model: v }),
@@ -1204,82 +1705,38 @@ export default function DashboardPage() {
                 {result.salary_analysis ? (
                   <section className="rounded-lg border border-slate-700 bg-slate-950/70 p-3 text-left">
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Salary Forecast
+                      Salary forecast
                     </h3>
-                    <p className="text-xs text-slate-400">
-                      Source:{" "}
-                      <span className="font-medium text-slate-200">
-                        {result.salary_analysis.source === "posted" ? "Posted in job ad" : "Market benchmark"}
-                      </span>
-                    </p>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Currency:{" "}
-                      <span className="font-medium text-slate-200">
-                        {result.salary_analysis.currency ?? preferredCurrency ?? "HUF"}
-                      </span>
-                    </p>
-                    <p className="mt-2 text-sm text-slate-200">
-                      Typical:{" "}
-                      <span className="font-semibold text-white">
+                    <SalaryForecastCard
+                      s={{
+                        match_status: result.salary_analysis.match_status,
+                        source: result.salary_analysis.source,
+                        rationale: result.salary_analysis.rationale,
+                        display: result.salary_analysis.salary_forecast_display ?? null,
+                      }}
+                    />
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-500">
+                      <span>
+                        Range:{" "}
                         {formatSalaryValue(
-                          result.salary_analysis.estimated_modus,
+                          result.salary_analysis.estimated_min,
+                          result.salary_analysis.currency ?? preferredCurrency ?? "HUF",
+                        )}{" "}
+                        –{" "}
+                        {formatSalaryValue(
+                          result.salary_analysis.estimated_max,
                           result.salary_analysis.currency ?? preferredCurrency ?? "HUF",
                         )}
                       </span>
                       {result.salary_analysis.conversion_applied ? (
-                        <span className="ml-1 text-xs text-slate-400">
-                          (~
-                          {formatSalaryValue(
-                            result.salary_analysis.normalized_estimated_modus,
-                            result.salary_analysis.comparison_currency,
-                          )}
+                        <span>
+                          vs floor in {result.salary_analysis.comparison_currency}
                           {result.salary_analysis.exchange_rate_used
-                            ? ` at ${result.salary_analysis.exchange_rate_used}`
+                            ? ` (${result.salary_analysis.exchange_rate_used})`
                             : ""}
-                          )
                         </span>
-                      ) : null}
-                    </p>
-                    <div className="mt-2 rounded-md border border-slate-700 bg-slate-900/60 p-2 text-xs text-slate-300">
-                      <p>
-                        Base:{" "}
-                        <span className="font-medium text-slate-100">
-                          {formatSalaryValue(
-                            result.salary_analysis.base_salary.estimated_modus,
-                            result.salary_analysis.currency ?? preferredCurrency ?? "HUF",
-                          )}{" "}
-                          ({result.salary_analysis.base_salary.basis})
-                        </span>
-                      </p>
-                      <p className="mt-1">
-                        + Bonus:{" "}
-                        <span className="font-medium text-slate-100">
-                          {result.salary_analysis.bonus_detected ? "Yes" : "No"}
-                        </span>
-                      </p>
-                      <p className="mt-1">
-                        + Benefits:{" "}
-                        <span className="font-medium text-slate-100">
-                          {result.salary_analysis.benefits_value ?? "Not mentioned"}
-                        </span>
-                      </p>
-                      {result.salary_analysis.conversion_applied ? (
-                        <p className="mt-1">
-                          + Normalized:{" "}
-                          <span className="font-medium text-slate-100">
-                            {formatSalaryValue(
-                              result.salary_analysis.normalized_estimated_modus,
-                              result.salary_analysis.comparison_currency,
-                            )}{" "}
-                            ({result.salary_analysis.comparison_currency})
-                            {result.salary_analysis.exchange_rate_used
-                              ? ` at ${result.salary_analysis.exchange_rate_used}`
-                              : ""}
-                          </span>
-                        </p>
                       ) : null}
                     </div>
-                    <p className="mt-1 text-xs text-slate-300">{result.salary_analysis.rationale}</p>
                     <div className="mt-2">
                       {(() => {
                         switch (result.salary_analysis.match_status) {
@@ -1626,156 +2083,13 @@ export default function DashboardPage() {
             Domain &amp; CV tuning
           </h2>
           <p className="text-xs text-slate-500">
-            Skill synonyms normalize tokens for matching (e.g. React.js → react). After each CV upload, use
-            <span className="text-slate-400"> CV skills &amp; synonym review </span>
-            (above) for one-click accept/dismiss; this block is for manual edits, Add row, and bulk save.
-            Constraint tactics soften vetoes vs. score deltas (semantic scorer + offline location check).
+            CV skills, AI skill suggestions, and skill synonyms are managed in the{" "}
+            <span className="text-slate-400">CV skills &amp; tuning</span> card above. This section keeps{" "}
+            <span className="font-medium text-slate-400">constraint tactics</span> only — they soften vetoes vs.
+            score deltas (semantic scorer + offline location check).
           </p>
 
           <div className="space-y-2">
-            <h3 className="text-xs font-medium text-slate-300">Skill synonyms</h3>
-            <div className="space-y-2 max-h-96 overflow-auto pr-1">
-              {skillSynonymPairs.length === 0 && skillSynonymPending.length === 0 ? (
-                <p className="text-xs text-slate-500">
-                  No rows yet — upload a CV for AI suggestions, or use Add row.
-                </p>
-              ) : null}
-              {skillSynonymPending.map((row, idx) => (
-                <div
-                  key={`pending-${idx}-${row.from}-${row.to}`}
-                  className="flex flex-wrap items-center gap-2 rounded-md border border-amber-800/40 bg-amber-950/15 pl-1 pr-1 py-0.5"
-                >
-                  <input
-                    type="text"
-                    value={row.from}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSkillSynonymPending((prev) =>
-                        prev.map((p, i) => (i === idx ? { ...p, from: v } : p)),
-                      );
-                    }}
-                    placeholder="alias (e.g. react.js)"
-                    className="min-w-[8rem] flex-1 rounded border border-amber-900/50 bg-slate-950 px-2 py-1 text-xs"
-                  />
-                  <span className="text-amber-600/90">→</span>
-                  <input
-                    type="text"
-                    value={row.to}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSkillSynonymPending((prev) =>
-                        prev.map((p, i) => (i === idx ? { ...p, to: v } : p)),
-                      );
-                    }}
-                    placeholder="canonical (e.g. react)"
-                    className="min-w-[8rem] flex-1 rounded border border-amber-900/50 bg-slate-950 px-2 py-1 text-xs"
-                  />
-                  <span className="shrink-0 rounded bg-amber-900/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-100">
-                    Suggested
-                  </span>
-                  <button
-                    type="button"
-                    disabled={domainSettingsBusy}
-                    className={BTN_PRIMARY_COMPACT}
-                    onClick={() => void approvePendingSynonymRow(idx)}
-                  >
-                    Approve
-                  </button>
-                  <button
-                    type="button"
-                    disabled={domainSettingsBusy}
-                    className={BTN_GHOST_SM}
-                    onClick={() => void dismissPendingSynonymRow(idx)}
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              ))}
-              {skillSynonymPairs.map((row, idx) => (
-                <div key={`pair-${idx}`} className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="text"
-                    value={row.from}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSkillSynonymPairs((prev) =>
-                        prev.map((p, i) => (i === idx ? { ...p, from: v } : p)),
-                      );
-                    }}
-                    placeholder="alias (e.g. react.js)"
-                    className="min-w-[8rem] flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
-                  />
-                  <span className="text-slate-500">→</span>
-                  <input
-                    type="text"
-                    value={row.to}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSkillSynonymPairs((prev) =>
-                        prev.map((p, i) => (i === idx ? { ...p, to: v } : p)),
-                      );
-                    }}
-                    placeholder="canonical (e.g. react)"
-                    className="min-w-[8rem] flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
-                  />
-                  <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                    Saved
-                  </span>
-                  <button
-                    type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={() =>
-                      setSkillSynonymPairs((prev) => prev.filter((_, i) => i !== idx))
-                    }
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className={BTN_GHOST_SM}
-                onClick={() => setSkillSynonymPairs((prev) => [...prev, { from: "", to: "" }])}
-              >
-                Add row
-              </button>
-              <button
-                type="button"
-                disabled={domainSettingsBusy}
-                onClick={() => void saveSkillSynonymsToApi()}
-                className={BTN_PRIMARY_COMPACT}
-              >
-                Save synonyms
-              </button>
-              {skillSynonymPending.length > 0 ? (
-                <>
-                  <button
-                    type="button"
-                    disabled={domainSettingsBusy}
-                    onClick={() => void approveAllPendingSynonyms()}
-                    className={BTN_PRIMARY_COMPACT}
-                  >
-                    Approve all suggested
-                  </button>
-                  <button
-                    type="button"
-                    disabled={domainSettingsBusy}
-                    onClick={() => void dismissAllPendingSynonyms()}
-                    className={BTN_GHOST_SM}
-                  >
-                    Dismiss all suggested
-                  </button>
-                </>
-              ) : null}
-            </div>
-            {synonymsUpdatedAt ? (
-              <p className="text-xs text-slate-500">Synonyms file updated: {synonymsUpdatedAt}</p>
-            ) : null}
-          </div>
-
-          <div className="space-y-2 border-t border-slate-800 pt-3">
             <h3 className="text-xs font-medium text-slate-300">Constraint tactics</h3>
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="flex flex-col gap-1 text-xs">

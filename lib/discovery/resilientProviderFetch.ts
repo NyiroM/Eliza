@@ -44,11 +44,15 @@ function professionSearchAttempts(seed: string): string[] {
   return t ? [t] : [];
 }
 
-async function fetchIndeedOnce(keywords: string, maxItems: number): Promise<DiscoveredJob[]> {
+async function fetchIndeedOnce(
+  keywords: string,
+  maxItems: number,
+  preferred_location?: string | null,
+): Promise<DiscoveredJob[]> {
   if (process.env.ELIZA_DISCOVERY_PLAYWRIGHT === "0") {
-    return fetchIndeedRssJobs(keywords, maxItems);
+    return fetchIndeedRssJobs(keywords, maxItems, preferred_location);
   }
-  return fetchIndeedJobsPlaywright(keywords, maxItems);
+  return fetchIndeedJobsPlaywright(keywords, maxItems, preferred_location);
 }
 
 const PROVIDER_LABEL: Record<DiscoveryProviderId, string> = {
@@ -64,27 +68,36 @@ function formatHint(provider: DiscoveryProviderId, parts: string[]): string | nu
   return truncateHint(`${label}: ${tail.join(" · ")}`);
 }
 
-async function fetchProfessionOnce(keywords: string, maxListings: number): Promise<DiscoveredJob[]> {
+async function fetchProfessionOnce(
+  keywords: string,
+  maxListings: number,
+  preferred_location?: string | null,
+): Promise<DiscoveredJob[]> {
   const skipPw = process.env.ELIZA_DISCOVERY_PLAYWRIGHT === "0";
   if (!skipPw) {
     try {
       const rawDv = parseInt(process.env.ELIZA_PROFESSION_DETAIL_VISITS ?? "", 10);
       const detailVisits = Number.isFinite(rawDv) ? Math.min(8, Math.max(0, rawDv)) : 1;
-      return await fetchProfessionHuJobsPlaywright(keywords, maxListings, detailVisits);
+      return await fetchProfessionHuJobsPlaywright(keywords, maxListings, detailVisits, preferred_location);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn("[discovery] Profession Playwright failed, using HTTP fallback:", msg);
     }
   }
-  return fetchProfessionHuJobs(keywords, Math.min(20, maxListings));
+  return fetchProfessionHuJobs(keywords, Math.min(20, maxListings), preferred_location);
 }
 
 async function fetchLinkedInResilient(
   id: DiscoveryProviderId,
   orderedPhrases: string[],
   maxTotal: number,
-  progress?: FetchJobsProgressOpts,
+  progress: FetchJobsProgressOpts | undefined,
+  preferred_location: string | null | undefined,
 ): Promise<{ jobs: DiscoveredJob[]; hint: string | null; error?: string }> {
+  const linkedInLocation =
+    typeof preferred_location === "string" && preferred_location.trim().length > 0
+      ? preferred_location.trim()
+      : "Hungary";
   const byId = new Map<string, DiscoveredJob>();
   const notes: string[] = [];
   let lastHttp: string | undefined;
@@ -107,7 +120,7 @@ async function fetchLinkedInResilient(
       inner: for (const attempt of buildWideningLadder(seed)) {
         if (byId.size >= maxTotal) break outer;
         try {
-          const batch = await fetchLinkedInGuestJobs(attempt, "Hungary", maxTotal);
+          const batch = await fetchLinkedInGuestJobs(attempt, linkedInLocation, maxTotal);
           if (batch.length === 0) {
             notes.push(`0 results for "${attempt}"`);
             continue;
@@ -160,7 +173,8 @@ async function fetchIndeedResilient(
   id: DiscoveryProviderId,
   orderedPhrases: string[],
   maxTotal: number,
-  progress?: FetchJobsProgressOpts,
+  progress: FetchJobsProgressOpts | undefined,
+  preferred_location: string | null | undefined,
 ): Promise<{ jobs: DiscoveredJob[]; hint: string | null; error?: string }> {
   await warnIfPlaywrightChromiumMissingForDiscovery().catch(() => {});
   const byId = new Map<string, DiscoveredJob>();
@@ -185,7 +199,7 @@ async function fetchIndeedResilient(
       inner: for (const attempt of buildWideningLadder(seed)) {
         if (byId.size >= maxTotal) break outer;
         try {
-          const batch = await fetchIndeedOnce(attempt, maxTotal);
+          const batch = await fetchIndeedOnce(attempt, maxTotal, preferred_location);
           if (batch.length === 0) {
             notes.push(`0 results for "${attempt}"`);
             continue;
@@ -238,7 +252,8 @@ async function fetchProfessionResilient(
   id: DiscoveryProviderId,
   orderedPhrases: string[],
   maxTotal: number,
-  progress?: FetchJobsProgressOpts,
+  progress: FetchJobsProgressOpts | undefined,
+  preferred_location: string | null | undefined,
 ): Promise<{ jobs: DiscoveredJob[]; hint: string | null; error?: string }> {
   await warnIfPlaywrightChromiumMissingForDiscovery().catch(() => {});
   const byId = new Map<string, DiscoveredJob>();
@@ -263,7 +278,7 @@ async function fetchProfessionResilient(
       inner: for (const attempt of professionSearchAttempts(seed)) {
         if (byId.size >= maxTotal) break outer;
         try {
-          const batch = await fetchProfessionOnce(attempt, 22);
+          const batch = await fetchProfessionOnce(attempt, 22, preferred_location);
           if (batch.length === 0) {
             notes.push(`0 results for "${attempt}"`);
             continue;
@@ -317,9 +332,10 @@ export async function fetchJobsForProviderResilient(
   orderedPhrases: string[],
   maxTotal: number,
   progress?: FetchJobsProgressOpts,
+  preferred_location?: string | null,
 ): Promise<{ jobs: DiscoveredJob[]; hint: string | null; error?: string }> {
   const seeds = orderedPhrases.slice(0, DISCOVERY_MAX_SEED_PHRASES_EFFECTIVE);
-  if (id === "linkedin") return fetchLinkedInResilient(id, seeds, maxTotal, progress);
-  if (id === "indeed") return fetchIndeedResilient(id, seeds, maxTotal, progress);
-  return fetchProfessionResilient(id, seeds, maxTotal, progress);
+  if (id === "linkedin") return fetchLinkedInResilient(id, seeds, maxTotal, progress, preferred_location);
+  if (id === "indeed") return fetchIndeedResilient(id, seeds, maxTotal, progress, preferred_location);
+  return fetchProfessionResilient(id, seeds, maxTotal, progress, preferred_location);
 }

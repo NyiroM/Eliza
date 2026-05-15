@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../lib/api/withActiveUser";
 import { isBackendLlmVerboseLog } from "../../../lib/logging/backendLlmVerbose";
 import { assertOllamaModelInstalled, OllamaRequestError } from "../../../lib/llm/ollama";
 import { runPipelineDetailed } from "../../../lib/pipeline";
@@ -38,6 +39,7 @@ type PipelineRequestBody = {
 };
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   const requestId = randomUUID();
   let body: PipelineRequestBody;
 
@@ -124,4 +126,5 @@ export async function POST(request: NextRequest) {
   const { result } = resultData;
 
   return jsonNoStore(result, 200);
+  });
 }

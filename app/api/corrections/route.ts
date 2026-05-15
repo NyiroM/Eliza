@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withActiveUser } from "../../../lib/api/withActiveUser";
 import { appendUserCorrection } from "../../../lib/storage/userCorrections";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,7 @@ type Body = {
 };
 
 export async function POST(request: NextRequest) {
+  return withActiveUser(request, async () => {
   let body: Body;
   try {
     body = (await request.json()) as Body;
@@ -40,4 +42,5 @@ export async function POST(request: NextRequest) {
     },
     200,
   );
+  });
 }

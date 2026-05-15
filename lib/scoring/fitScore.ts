@@ -12,15 +12,23 @@ const SENIORITY_RANK: Record<SeniorityLevel, number> = {
   lead: 4,
 };
 
-/** Max "X years" style number found in free text (CV blob). */
-function extractMaxYearsFromProfile(profileLower: string): number | null {
-  const re = /(\d+)\+?\s*(?:years?|yrs?)/gi;
+/**
+ * Max stated single-number experience in free text (CV / profile blob).
+ * English "5 years" / "10+ yrs" and Hungarian "8 év" / "3+ év tapasztalat".
+ * Not a sum of employments — largest plausible self-reported anchor.
+ */
+export function extractStatedExperienceYearsFromText(profileLower: string): number | null {
   let best = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(profileLower)) !== null) {
-    const n = parseInt(m[1], 10);
-    if (!Number.isNaN(n)) best = Math.max(best, n);
-  }
+  const scan = (re: RegExp) => {
+    let m: RegExpExecArray | null;
+    const r = new RegExp(re.source, re.flags);
+    while ((m = r.exec(profileLower)) !== null) {
+      const n = parseInt(m[1], 10);
+      if (!Number.isNaN(n) && n >= 0 && n <= 60) best = Math.max(best, n);
+    }
+  };
+  scan(/(\d+)\+?\s*(?:years?|yrs?)/gi);
+  scan(/(\d+)\+?\s*év\b/gi);
   return best > 0 ? best : null;
 }
 
@@ -264,7 +272,7 @@ export function calculateFitScore(
 
   // Experience / education signals from job entities vs CV text (soft nudges).
   if (jobEntities.experience_years != null && jobEntities.experience_years > 0) {
-    const userYears = userExperienceOverrideYears ?? extractMaxYearsFromProfile(profileBlob);
+    const userYears = userExperienceOverrideYears ?? extractStatedExperienceYearsFromText(profileBlob);
     if (userYears != null) {
       if (userYears >= jobEntities.experience_years) {
         fit = Math.min(100, fit + 5);

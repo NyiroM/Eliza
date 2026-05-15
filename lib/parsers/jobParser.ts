@@ -714,7 +714,7 @@ EDUCATION (strict — degrees, qualifications, institutions ONLY):
 - Mentally route lines that describe WHAT THE HIRE WILL DO day-to-day into a temporary "task buffer"; DISCARD that buffer from education, required_skills, and optional_skills unless a line names a concrete tool/stack/certification (then keep only the tool/stack token in skills, not the prose duty).
 - If unsure whether a line is education vs task, prefer null for education and omit from skills.
 
-- estimated_salary: raw salary phrase if present; else null.
+- estimated_salary: raw salary phrase if present; else null. If the posting uses Hungarian hourly wording (órabér, óradíj, Ft/óra, óránként) or English per-hour pay, keep that wording verbatim (do not convert to monthly).
 - required_seniority: infer from level wording and years; unknown if unclear.
 
 LOCATION & WORK MODEL (BE AGGRESSIVE):

@@ -5,7 +5,7 @@ import type {
   DiscoveryProviderState,
   DiscoverySettings,
 } from "../../types/discovery";
-import { DISCOVERY_DIR, DISCOVERY_SETTINGS_PATH } from "./paths";
+import { getDiscoveryDir, getDiscoverySettingsPath } from "./paths";
 import { migrateApprovedSuggestionsIntoSearchKeywords, sanitizeKeywordSuggestions } from "./keywordSync";
 
 const DEFAULT_PROVIDER: DiscoveryProviderState = {
@@ -33,7 +33,7 @@ export function defaultDiscoverySettings(): DiscoverySettings {
 
 export async function loadDiscoverySettings(): Promise<DiscoverySettings> {
   try {
-    const raw = await readFile(DISCOVERY_SETTINGS_PATH, "utf-8");
+    const raw = await readFile(getDiscoverySettingsPath(), "utf-8");
     const parsed = JSON.parse(raw) as Partial<DiscoverySettings>;
     const base = defaultDiscoverySettings();
     const mergedProviders = { ...base.providers, ...(parsed.providers ?? {}) };
@@ -52,8 +52,8 @@ export async function loadDiscoverySettings(): Promise<DiscoverySettings> {
 }
 
 export async function saveDiscoverySettings(settings: DiscoverySettings): Promise<void> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
-  await writeFile(DISCOVERY_SETTINGS_PATH, JSON.stringify(settings, null, 2), "utf-8");
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  await writeFile(getDiscoverySettingsPath(), JSON.stringify(settings, null, 2), "utf-8");
 }
 
 export function patchProviderState(

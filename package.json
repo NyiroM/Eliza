@@ -1,6 +1,6 @@
 {
   "name": "eliza",
-  "version": "0.4.30",
+  "version": "0.5.0",
   "private": true,
   "description": "AI-powered career co-pilot for local job-fit analysis with Ollama, Next.js, and TypeScript",
   "author": "NyiroM (https://github.com/NyiroM)",
@@ -16,10 +16,14 @@
     "start": "next start",
     "lint": "eslint",
     "test:salary-oracle": "tsx scripts/verify-salary-oracle.mts",
+    "test:salary-titles": "tsx scripts/verify-salary-title-match.mts",
+    "test:salary-bench-titles": "tsx scripts/benchmark-salary-oracle-titles.mts",
+    "test:salary-bench-titles-hu": "tsx scripts/benchmark-salary-oracle-titles-hu.mts",
     "debug:profession-microsteps": "tsx scripts/debug-profession-hu-microsteps.mts",
     "test:profession-search": "tsx scripts/integration-profession-hu-search.mts",
     "test:indeed-job-url": "tsx scripts/verify-indeed-job-url.mts",
     "test:job-id-canonicalization": "tsx scripts/verify-job-id-canonicalization.mts",
+    "test:location-geography-veto": "tsx scripts/verify-location-geography-veto.mts",
     "benchmark:ollama-tuning": "tsx scripts/benchmark-ollama-tuning.mts"
   },
   "dependencies": {

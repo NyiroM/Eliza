@@ -1,8 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { requireUserRoot } from "./activeUserContext";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage");
-const USER_CORRECTIONS_PATH = path.join(STORAGE_DIR, "user_corrections.json");
+function userCorrectionsPath(): string {
+  return path.join(requireUserRoot(), "user_corrections.json");
+}
 
 export type UserCorrectionEntry = {
   text: string;
@@ -21,7 +23,7 @@ const EMPTY: StoredUserCorrections = {
 
 export async function loadUserCorrectionsFromStorage(): Promise<StoredUserCorrections> {
   try {
-    const content = await readFile(USER_CORRECTIONS_PATH, "utf-8");
+    const content = await readFile(userCorrectionsPath(), "utf-8");
     const parsed = JSON.parse(content) as Partial<StoredUserCorrections>;
     const corrections = Array.isArray(parsed.corrections)
       ? parsed.corrections
@@ -69,7 +71,8 @@ export async function appendUserCorrection(text: string): Promise<StoredUserCorr
     ],
     updated_at: new Date().toISOString(),
   };
-  await mkdir(STORAGE_DIR, { recursive: true });
-  await writeFile(USER_CORRECTIONS_PATH, JSON.stringify(next, null, 2), "utf-8");
+  const p = userCorrectionsPath();
+  await mkdir(path.dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(next, null, 2), "utf-8");
   return next;
 }

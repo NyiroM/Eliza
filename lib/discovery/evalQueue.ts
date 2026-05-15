@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../types/discovery";
 import { loadEvaluatedJobIds } from "./evaluatedStore";
 import { isFailureInCooldown, loadEvalFailureMap } from "./evalFailureStore";
-import { DISCOVERY_DIR, DISCOVERY_EVAL_QUEUE_PATH } from "./paths";
+import { getDiscoveryDir, getDiscoveryEvalQueuePath } from "./paths";
 import type { SuppressedFilter } from "./suppressedStore";
 import { isSuppressedDiscoveredJob, loadSuppressedFilter } from "./suppressedStore";
 
@@ -38,7 +38,7 @@ export function scoreJobHeuristicPriority(job: DiscoveredJob, searchKeywords: st
 
 async function loadQueueFile(): Promise<QueuedEvalJob[]> {
   try {
-    const raw = await readFile(DISCOVERY_EVAL_QUEUE_PATH, "utf-8");
+    const raw = await readFile(getDiscoveryEvalQueuePath(), "utf-8");
     const parsed = JSON.parse(raw) as QueueFile;
     return Array.isArray(parsed.items) ? parsed.items : [];
   } catch {
@@ -47,9 +47,9 @@ async function loadQueueFile(): Promise<QueuedEvalJob[]> {
 }
 
 async function saveQueueFile(items: QueuedEvalJob[]): Promise<void> {
-  await mkdir(DISCOVERY_DIR, { recursive: true });
+  await mkdir(getDiscoveryDir(), { recursive: true });
   const data: QueueFile = { items };
-  await writeFile(DISCOVERY_EVAL_QUEUE_PATH, JSON.stringify(data, null, 2), "utf-8");
+  await writeFile(getDiscoveryEvalQueuePath(), JSON.stringify(data, null, 2), "utf-8");
 }
 
 export async function clearEvalQueue(): Promise<void> {

@@ -6,15 +6,16 @@ import {
 } from "./cache/cvParseCache";
 import { isBackendLlmVerboseLog } from "./logging/backendLlmVerbose";
 import { extractRecentExperienceSection } from "./cv/experienceSectionSnippets";
-import { applySkillSynonyms, buildSkillSynonymMap } from "./domain/skillSynonyms";
+import { applySkillSynonyms, buildSkillSynonymMap, serializeSynonymPairsForPrompt } from "./domain/skillSynonyms";
 import { parseJobText } from "./parsers/jobParser";
 import { parseCvText, type CvParseResult } from "./parsers/cvParser";
 import { runCvMissingSkillsEvidencePass } from "./parsers/cvEvidencePass";
-import { generateJsonWithOllamaStrict } from "./llm/ollama";
+import { generateJsonWithOllamaStrict, getSemanticFitReviewOllamaFormat } from "./llm/ollama";
 import {
   calculateFitScore,
   collectConstraintSignalHints,
   extractExperienceOverrideFromConstraints,
+  extractStatedExperienceYearsFromText,
   validateExperienceRequirement,
   type FitScoreResult,
 } from "./scoring/fitScore";
@@ -69,7 +70,16 @@ import {
   inferFallbackConstraintVetoWithTactics,
   shouldSuppressHardVetoForTactics,
 } from "./pipeline/constraintVetoTactics";
-import { buildSemanticFitScoreReviewPrompt } from "./prompts/semanticFitScoreReviewPrompt";
+import {
+  enforceLocationGeographyOnReview,
+  inferLocationGeographyVeto,
+  mergeOfflineVetos,
+  type OfflineVetoResult,
+} from "./pipeline/locationGeographyVeto";
+import {
+  buildSemanticFitScoreReviewPrompt,
+  type SemanticFitDecisionBrief,
+} from "./prompts/semanticFitScoreReviewPrompt";
 import type { StoredConstraintTactics } from "./storage/constraintTactics";
 
 export type {
@@ -396,7 +406,12 @@ function normalizeConstraintText(value: string): string {
 }
 
 function hasNegativeConstraintSignal(value: string): boolean {
-  return /\b(no|cannot|can't|do not|don't|excluding|exclude|without|avoid|not)\b/i.test(value);
+  const t = value.toLowerCase();
+  // Avoid false positives: "should not be vetoed", "not a nice-to-have", "without exception",
+  // "only ... English and Hungarian" (bare "not" / "without" are not exclusion intent).
+  return /\b(?:no|cannot|can't|do not|don't|excluding|exclude|avoid|never|will not|not willing|not interested|without(?!\s+exception))\b/i.test(
+    t,
+  );
 }
 
 function detectUniversalNegativeConstraintConflict(
@@ -458,7 +473,7 @@ function buildHardVetoReview(
 export function parseSemanticFitReviewPayload(
   data: unknown,
   baseline: FitScoreResult,
-  offlineVeto: { vetoed: boolean; veto_reason: string | null },
+  offlineVeto: OfflineVetoResult,
 ): SemanticFitReview {
   const o = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
 
@@ -466,10 +481,15 @@ export function parseSemanticFitReviewPayload(
   let vetoReason =
     typeof o.veto_reason === "string" && o.veto_reason.trim() ? o.veto_reason.trim() : null;
 
-  if (!vetoed && offlineVeto.vetoed) {
+  const serverAppliedVeto = !vetoed && offlineVeto.vetoed;
+  if (serverAppliedVeto) {
     vetoed = true;
     vetoReason = offlineVeto.veto_reason;
   }
+  const offlineGeographyVeto =
+    vetoed &&
+    vetoReason != null &&
+    /dashboard target location|server geography check/i.test(vetoReason);
 
   const matched = strList(o.matched_skills);
   const missing = strList(o.missing_skills);
@@ -486,14 +506,16 @@ export function parseSemanticFitReviewPayload(
   let breakdown = rawBreakdown;
   if (vetoed) {
     breakdown =
-      rawBreakdown.length > 0
-        ? rawBreakdown
-        : `VETO: ${vetoReason ?? "Hard constraint violation."}\nFinal Score: 0%.`;
+      offlineGeographyVeto && vetoReason
+        ? `VETO: ${vetoReason}\nFinal Score: 0%.`
+        : rawBreakdown.length > 0
+          ? rawBreakdown
+          : `VETO: ${vetoReason ?? "Hard constraint violation."}\nFinal Score: 0%.`;
   } else if (!rawBreakdown || !isCompleteMathematicalBreakdown(rawBreakdown)) {
     breakdown = `Breakdown generation failed.\nLiteral baseline reference: ${baseline.fit_score}%.\nApplied fit score: ${fitScore}%.`;
   }
 
-  const narrative =
+  let narrative =
     typeof o.narrative_summary === "string" && o.narrative_summary.trim().length > 0
       ? o.narrative_summary.trim()
       : "";
@@ -507,6 +529,13 @@ export function parseSemanticFitReviewPayload(
   if (!oneSentence) {
     oneSentence = "Open Match analysis below for the full numeric breakdown.";
   }
+  if (serverAppliedVeto && vetoReason) {
+    const headline =
+      (typeof offlineVeto.user_message === "string" && offlineVeto.user_message.trim()) ||
+      vetoReason;
+    oneSentence = headline.trim().slice(0, 400);
+    if (offlineGeographyVeto) narrative = "";
+  }
   oneSentence = oneSentence.slice(0, 400);
 
   const seniorityMatch =
@@ -517,7 +546,7 @@ export function parseSemanticFitReviewPayload(
   if (badgeRaw === "Location Conflict" || badgeRaw === "Preference Match") {
     badge = badgeRaw;
   }
-  if (vetoed && !badge && /location|region|country|city/i.test(vetoReason ?? "")) {
+  if (offlineGeographyVeto || (vetoed && !badge && /location|region|country|city/i.test(vetoReason ?? ""))) {
     badge = "Location Conflict";
   }
 
@@ -591,6 +620,7 @@ export function parseSemanticFitReviewPayload(
 async function semanticFitScoreReviewWithLlm(params: {
   constraints: string[];
   preferredLocation: string | null;
+  decisionBrief: SemanticFitDecisionBrief;
   jobTextEnglish: string;
   combinedJobText: string;
   jobBoardMetadata: Record<string, unknown>;
@@ -612,18 +642,36 @@ async function semanticFitScoreReviewWithLlm(params: {
   skillSynonymsPromptJson: string;
   role?: "analysis" | "extract_cv" | "creative_coach" | "creative_rewrite";
 }): Promise<SemanticFitReview> {
-  const offlineVeto = inferFallbackConstraintVetoWithTactics(
-    params.constraints,
+  const jobLocation =
     typeof params.jobBoardMetadata.job_location === "string"
       ? params.jobBoardMetadata.job_location
-      : null,
-    params.jobTextEnglish,
-    params.tactics,
+      : null;
+  const workModel =
+    typeof params.jobBoardMetadata.work_model === "string"
+      ? params.jobBoardMetadata.work_model
+      : null;
+  const geoInput = {
+    preferredLocation: params.preferredLocation,
+    jobLocation,
+    jobTextEnglish: params.jobTextEnglish,
+    combinedJobText: params.combinedJobText,
+    workModel,
+    tactics: params.tactics,
+  };
+  const offlineVeto = mergeOfflineVetos(
+    inferFallbackConstraintVetoWithTactics(
+      params.constraints,
+      jobLocation,
+      params.jobTextEnglish,
+      params.tactics,
+    ),
+    inferLocationGeographyVeto(geoInput),
   );
 
   const prompt = buildSemanticFitScoreReviewPrompt({
     constraints: params.constraints,
     preferredLocation: params.preferredLocation,
+    decisionBrief: params.decisionBrief,
     jobTextEnglish: params.jobTextEnglish,
     combinedJobText: params.combinedJobText,
     jobBoardMetadata: params.jobBoardMetadata,
@@ -643,6 +691,10 @@ async function semanticFitScoreReviewWithLlm(params: {
   const data = await generateJsonWithOllamaStrict<Record<string, unknown>>(prompt, {
     model: params.model,
     role: params.role ?? "analysis",
+    // Constrain Gemma / Qwen2.5 / Llama 3.1-8B output to a JSON Schema so the model
+    // cannot truncate or corrupt the payload mid-generation (Gemma e4b regressed at
+    // ~char 2300 on long postings); other families keep the looser `format:"json"`.
+    ollamaFormat: getSemanticFitReviewOllamaFormat(params.model),
     ...(params.correctionsBlock.trim()
       ? { systemAppend: params.correctionsBlock.trim() }
       : {}),
@@ -660,8 +712,6 @@ export async function runPipelineDetailed(
     throw new Error("No stored CV found. Upload CV first.");
   }
 
-  const storedConstraints = await loadUserConstraintsFromStorage();
-  const constraints = storedConstraints.constraints;
   const userPrefs = await loadUserPreferences();
   let preferredLocationRaw = "";
   if (typeof input.preferred_location === "string") {
@@ -674,7 +724,7 @@ export async function runPipelineDetailed(
   const correctionsBlock = await loadUserCorrectionsPromptBlock();
   const storedSynonyms = await loadSkillSynonymsFromStorage();
   const synonymMap = buildSkillSynonymMap(storedSynonyms.pairs);
-  const synonymPairsForPrompt = storedSynonyms.pairs.slice(0, 28);
+  const skillSynonymsPromptJson = serializeSynonymPairsForPrompt(storedSynonyms.pairs);
   const constraintTactics = await loadConstraintTacticsFromStorage();
 
   const rawCvText = storedCv.raw_text ?? "";
@@ -694,10 +744,16 @@ export async function runPipelineDetailed(
     cvParsed = await parseCvText(rawCvText, model);
     await writeCvParseCache(cacheKey, rawCvText, model, cvParsed, storedCv.source_filename ?? null);
   }
+  // `user_cv.json` skills are the user-editable source of truth (comma list / approvals).
+  const diskSkills = storedCv.parsed?.skills;
+  const baseSkills = Array.isArray(diskSkills) ? diskSkills : cvParsed.skills;
   cvParsed = {
     ...cvParsed,
-    skills: applySkillSynonyms(cvParsed.skills, synonymMap),
+    skills: applySkillSynonyms(baseSkills, synonymMap),
   };
+
+  // Reload so saves during CV parse (cache miss) or other slow steps are visible to job + veto prompts.
+  let constraints = (await loadUserConstraintsFromStorage()).constraints;
 
   const jobParsed = await parseJobText(
     input.job,
@@ -766,10 +822,12 @@ export async function runPipelineDetailed(
     source: "skipped",
   };
   if (score.missing_skills.length > 0) {
+    const constraintsForEvidence = (await loadUserConstraintsFromStorage()).constraints;
     const ev = await runCvMissingSkillsEvidencePass({
       cvText: rawCvText,
       missingRequiredSkills: score.missing_skills,
       model,
+      constraints: constraintsForEvidence,
     });
     cvEvidencePass = { confirmed_skills: ev.confirmed_skills, source: ev.source };
     if (ev.confirmed_skills.length > 0) {
@@ -802,8 +860,11 @@ export async function runPipelineDetailed(
     }
   }
 
+  // Second reload: user may have saved constraints while job parse / CV evidence runs (e.g. Discovery reevaluate batch).
+  constraints = (await loadUserConstraintsFromStorage()).constraints;
+
   const constraintHints = [
-    ...buildConstraintTacticHints(constraintTactics),
+    ...buildConstraintTacticHints(constraintTactics, preferredLocation),
     ...collectConstraintSignalHints(constraints, combinedJobText),
   ];
 
@@ -841,11 +902,24 @@ export async function runPipelineDetailed(
       ? `Vetoed: This role requires ${requiredProgrammingSkill}, which you explicitly excluded.`
       : null;
 
+  const decisionBrief: SemanticFitDecisionBrief = {
+    job_location: jobParsed.job_location,
+    preferred_work_location: preferredLocation,
+    work_model: jobParsed.work_model,
+    job_type: jobParsed.job_type,
+    job_experience_years: experienceYearsForScoring,
+    candidate_experience_years_hint:
+      userExperienceOverride ?? extractStatedExperienceYearsFromText(userProfileBlob.toLowerCase()),
+    baseline_fit_score: score.fit_score,
+    constraints_count: constraints.length,
+  };
+
   let semanticReview = hardVetoReason
     ? buildHardVetoReview(score, hardVetoReason)
     : await semanticFitScoreReviewWithLlm({
         constraints,
         preferredLocation,
+        decisionBrief,
         jobTextEnglish: jobParsed.english_job_text,
         combinedJobText,
         jobBoardMetadata: jobBoardMetadataForScorer,
@@ -864,12 +938,20 @@ export async function runPipelineDetailed(
         model,
         correctionsBlock,
         tactics: constraintTactics,
-        skillSynonymsPromptJson: JSON.stringify(synonymPairsForPrompt).slice(0, 1500),
+        skillSynonymsPromptJson,
         role: "analysis",
       });
 
   if (!hardVetoReason) {
     semanticReview = applyTacticsVetoRelaxation(semanticReview, score, constraintTactics);
+    semanticReview = enforceLocationGeographyOnReview(semanticReview, {
+      preferredLocation,
+      jobLocation: jobParsed.job_location,
+      jobTextEnglish: jobParsed.english_job_text,
+      combinedJobText,
+      workModel: jobParsed.work_model,
+      tactics: constraintTactics,
+    });
   }
 
   // Run Salary Oracle (resilient)
@@ -881,6 +963,9 @@ export async function runPipelineDetailed(
       constraints,
       model,
       preferredCurrency: userPrefs.preferred_currency,
+      jobExperienceYears: experienceYearsForScoring,
+      cvExperienceYears:
+        userExperienceOverride ?? extractStatedExperienceYearsFromText(userProfileBlob.toLowerCase()),
     });
   } catch (err) {
     console.error('[Pipeline] Salary Oracle failed:', err);

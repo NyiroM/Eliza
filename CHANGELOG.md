@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-15
+
+### Added
+
+- **Multiple local profiles** — `storage/users/registry.json` and per-profile trees under `storage/users/<id>/` (CV, preferences, constraints, discovery catalog, domain JSON). Legacy flat `storage/` migrates once into **`default`**. Dashboard **Active profile** / **New profile**; browser **`elizaFetch`** sends **`X-Eliza-Active-User`**; routes use **`withActiveUser`** (`lib/api/withActiveUser.ts`). **`GET` / `POST /api/users`** lists or creates profiles (no active-user header).
+- **CV skill curation** — after PDF upload, **`POST /api/upload-cv/suggest-skills`** (Ollama) proposes extra skills; **`GET/POST /api/upload-cv/skill-suggestions`** and **`/api/upload-cv/skills`** / **`/api/upload-cv/skill`** manage pending and confirmed skill lists on the stored CV.
+- **Location geography veto** — deterministic check in **`lib/pipeline/locationGeographyVeto.ts`** when dashboard **Target location** (constraint tactic `location: strong_preference`) conflicts with the job’s stated location; complements LLM veto. Verifier: **`npm run test:location-geography-veto`**.
+- **Salary Oracle v4 benchmark** — committed dataset **`data/salary/hays-hu-2026-enriched-v4.json`** (aliases, `search_vector`, `inferred_skill_tags`, `skill_premium_multiplier`, `market_heat`, weighted title matching). Build helper: **`scripts/build_hays_salary_json.py`**.
+- **Discovery salary snapshots** — match / non-match rows and HTML export can carry a compact **`salary_forecast`** snapshot; hub and dashboard use shared render helpers (`SalaryForecastCard`, `lib/salaryForecastDisplay.ts`).
+- **Scripts** — `test:salary-titles`, `test:salary-bench-titles`, `test:salary-bench-titles-hu`, `test:location-geography-veto`.
+
+### Changed
+
+- **Per-profile storage** — discovery paths, CV parse cache (`.cache/cv_parses/<id>/`), and all user JSON I/O resolve through the active user context instead of a single global `storage/` tree.
+- **Target location on sync** — **Profession.hu**, **Indeed** (`l=`), and **LinkedIn** guest search share **`lib/discovery/locationPreferenceShared.ts`** rules (city slug vs national **Hungary**).
+- **Salary Oracle** — enrichment-aware benchmark scoring, skill premium / market heat, day-rate vs monthly guards, and expanded regression tests.
+
+### Fixed
+
+- **Discovery “stuck” on one job** — eval-queue processing bumps **`updatedAt` every 45s** during `runPipelineDetailed`; hub copy explains multi-step Ollama work per row.
+- **LinkedIn / HTTP discovery hangs** — guest LinkedIn, **Indeed RSS**, and **Profession.hu** list fetches use **`timedDiscoveryFetch`** with **`DISCOVERY_HTTP_FETCH_TIMEOUT_MS`** (default **45s**). Drain TTL extended while **`process-queue`** still has work.
+- **Reevaluate vs fresh constraints** — `runPipelineDetailed` reloads **`user_constraints.json`** twice so edits during long LLM steps apply before veto and salary.
+- **Salary Oracle HUF 45k false benchmark** — daily-rate Hays **IT Contracting** rows excluded for non-contract jobs; developer↔engineer overlap in **scoreMatch**; conservative tie-break on modus.
+- **Profession.hu / Indeed vs target location** — sync respects dashboard **Target location** (see Changed).
+
 ## [0.4.30] — 2026-05-09
 
 ### Fixed
