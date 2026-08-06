@@ -33,6 +33,28 @@ const SKILL_KEYWORDS = [
   "jest",
   "cypress",
   "ci/cd",
+  // Industrial / machine vision & technical pre-sales (domain CV coverage)
+  "machine vision",
+  "industrial vision",
+  "computer vision",
+  "robot vision",
+  "visual quality inspection",
+  "thermal imaging",
+  "anpr",
+  "ip video",
+  "pre-sales",
+  "presales",
+  "technical sales",
+  "consultative sales",
+  "solution architecture",
+  "system integration",
+  "manufacturing automation",
+  "proof of concept",
+  "salesforce",
+  "crm",
+  "sap",
+  "rpa",
+  "wms",
 ] as const;
 
 function normalize(text: string): string {
@@ -43,6 +65,8 @@ function normalizeSkillName(skill: string): string {
   const map: Record<string, string> = {
     nextjs: "next.js",
     "node.js": "node",
+    presales: "pre-sales",
+    "pre sales": "pre-sales",
   };
 
   return map[skill] ?? skill;
@@ -171,7 +195,13 @@ ${cvText}
     model,
     role: "extract_cv",
   });
-  const parsed = sanitizeCvResult(llmResult.data, fallback);
+  let parsed = sanitizeCvResult(llmResult.data, fallback);
+
+  // When the LLM under-extracts (common on domain CVs outside the web stack), merge keyword hits.
+  if (parsed.skills.length < 5 && fallback.skills.length > 0) {
+    const merged = [...new Set([...parsed.skills, ...fallback.skills])].sort();
+    parsed = { ...parsed, skills: merged };
+  }
 
   // Ensure minimum 3 stories when possible from fallback.
   if (parsed.core_stories.length >= 3) {
