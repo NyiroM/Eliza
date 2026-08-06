@@ -80,7 +80,8 @@ Write-Host "Opening http://localhost:3000 ..." -ForegroundColor Cyan
 Start-Process "http://localhost:3000/"
 
 Write-Host "LAN: other devices on this Wi-Fi can use http://<this-PC-LAN-IP>:3000 (see dashboard Network access panel)." -ForegroundColor DarkCyan
-Write-Host "Set ELIZA_GATE_PASSWORD in .env.local before exposing the UI on your LAN." -ForegroundColor DarkYellow
+Write-Host "Remote: install Tailscale on this host and your phone — no router port forward (see README step 2)." -ForegroundColor DarkCyan
+Write-Host "Set ELIZA_GATE_PASSWORD in .env.local before exposing the UI on LAN or Tailscale." -ForegroundColor DarkYellow
 
 Write-Host "Launcher finished. Use the other PowerShell window for dev server logs." -ForegroundColor Green
 

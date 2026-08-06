@@ -118,8 +118,9 @@ function LoginForm() {
               {busy ? "Signing in…" : "Open dashboard"}
             </button>
             <p className="text-[11px] leading-relaxed text-slate-500">
-              Step 1: same Wi‑Fi / LAN only. Use the host PC&apos;s LAN address (shown on the dashboard after
-              login). Worldwide access comes in a later step.
+              Same Wi‑Fi: use the host LAN address. Away from home: connect with Tailscale (same account as
+              the host), then open the Tailscale URL from the dashboard Network access panel. Do not
+              port-forward this app on your router.
             </p>
           </form>
         )}

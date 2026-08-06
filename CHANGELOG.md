@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-06
+
 ### Added
 
+- **LAN UI access (step 1)** — `npm run dev` / `npm start` bind to **`0.0.0.0`** so other devices on the same Wi‑Fi can open the dashboard. Optional **`ELIZA_GATE_PASSWORD`** enables a browser login gate (`/login`, httpOnly cookie). Dashboard **Network access** panel lists LAN URLs (`GET /api/server-info`). Auth helpers under **`lib/auth/`**; **`proxy.ts`** allows same-origin LAN Origins and enforces the gate.
+- **Tailscale remote access (step 2)** — same-origin allow for Tailscale CGNAT (`100.64.0.0/10`) and **`*.ts.net`**; dashboard lists Tailscale URLs when the host has a Tailscale IP. Personal mesh only — **no router port forward**. Docs cover host + phone setup and optional Tailscale Serve HTTPS.
+- Scripts **`dev:localhost`** / **`start:localhost`** for loopback-only binds.
+- **Ollama runtime tuning env knobs** (`lib/llm/ollama.ts`) — **`OLLAMA_TIMEOUT_MS`**, **`OLLAMA_NUM_PREDICT`** (num_predict ceiling), and **`OLLAMA_NUM_CTX`** now override the previously hardcoded defaults (all clamped to safe ranges). Documented in **`.env.example`**. Helps run the pipeline on weak / CPU-only hardware.
+- **`ELIZA_OLLAMA_FORCE_SCHEMA`** — when truthy, JSON-Schema-constrained output is applied to the relevance and semantic-fit calls on **every** model, not just the schema-tuned `gemma` / `qwen2.5` / `llama3.1:8b` families. Prevents unconstrained small models (e.g. `llama3.2`) from generating until the timeout.
 - **Prospecting / new-business hard veto** — when constraints ban hunting / prospecting / net-new clients and the posting is a hunter-style new-business sales role, the pipeline hard-vetoes before semantic review (`lib/pipeline/prospectingVeto.ts`). Soft HINT for the scorer when the ban applies. Verifier: **`npm run test:prospecting-veto`**.
 - **Industrial vision / pre-sales skill keywords** — CV and job keyword fallbacks include machine vision, robot vision, pre-sales, VQI, thermal imaging, RPA, WMS, etc. LLM CV parse merges keyword hits when it returns fewer than 5 skills.
 
 ### Fixed
 
+- **Default Ollama model** — `DEFAULT_OLLAMA_MODEL` changed from the invalid tag `gemma4:e4b` to the real, lightweight, schema-tuned **`gemma3n:e4b`** so the fallback model passes the install check instead of always erroring.
 - **Semantic fit breakdown stub** — incomplete model breakdowns no longer show conflicting “baseline X% / applied Y%” lines; provisional 7-line arithmetic matches `fit_score`. When the model omits `score_components`, the server uses the **deterministic baseline** fit score and **always rewrites** the breakdown so Final Score cannot disagree. “Rejected” wording is stripped when `vetoed=false`.
 - **Baseline skill matching** — ignore generic tokens (`technologies`, `systems`, `knowledge`, …) in multi-word required-skill matching so soft overlap cannot inflate scores to 100% on weak hits.
 - **Ollama Undici headers timeout** — HTTP client `headersTimeout` / `bodyTimeout` aligned with **`OLLAMA_TIMEOUT_MS`** so slow CPU generates are not killed at the Undici ~300s default before the AbortController fires.
@@ -155,9 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release: Next.js dashboard, local **Ollama**-backed job/CV parsing, literal + semantic fit scoring, semantic highlights, user constraints and preferences, CV PDF upload, Chrome side-panel extension, and application-asset generation APIs.
 
+[0.6.0]: https://github.com/NyiroM/Eliza/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/NyiroM/Eliza/compare/v0.4.30...v0.5.0
 [0.2.0]: https://github.com/NyiroM/Eliza/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NyiroM/Eliza/releases/tag/v0.1.0
 [0.4.30]: https://github.com/NyiroM/Eliza/compare/v0.4.29...v0.4.30
+
 [0.4.29]: https://github.com/NyiroM/Eliza/compare/v0.4.28...v0.4.29
 [0.4.28]: https://github.com/NyiroM/Eliza/compare/v0.4.27...v0.4.28
 [0.4.27]: https://github.com/NyiroM/Eliza/compare/v0.4.26...v0.4.27
