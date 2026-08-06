@@ -1,6 +1,11 @@
 import type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
+import {
+  hasNoProspectingConstraint,
+  isNewBusinessHuntingRole,
+} from "../pipeline/prospectingVeto";
 
 export type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
+export { hasNoProspectingConstraint, isNewBusinessHuntingRole } from "../pipeline/prospectingVeto";
 
 type SeniorityLevel = "junior" | "mid" | "senior" | "lead" | "unknown";
 
@@ -105,6 +110,16 @@ export function collectConstraintSignalHints(constraints: string[], jobText: str
   if (hasNoPmConstraint(constraints) && isPmRoleJob(jobText)) {
     hints.push(
       "User constraints mention avoiding PM / project or product manager roles; job text may describe a PM-type role.",
+    );
+  }
+
+  if (hasNoProspectingConstraint(constraints) && isNewBusinessHuntingRole(jobText)) {
+    hints.push(
+      "User constraints ban new-client hunting / prospecting / net-new acquisition; this posting describes a new-business or hunter-style sales role — hard veto is expected.",
+    );
+  } else if (hasNoProspectingConstraint(constraints)) {
+    hints.push(
+      "User constraints ban prospecting / hunting new clients — do not treat existing-account or technical support work as a conflict unless the role is primarily new-business acquisition.",
     );
   }
 

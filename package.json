@@ -26,6 +26,7 @@
     "test:indeed-job-url": "tsx scripts/verify-indeed-job-url.mts",
     "test:job-id-canonicalization": "tsx scripts/verify-job-id-canonicalization.mts",
     "test:location-geography-veto": "tsx scripts/verify-location-geography-veto.mts",
+    "test:prospecting-veto": "tsx scripts/verify-prospecting-veto.mts",
     "benchmark:ollama-tuning": "tsx scripts/benchmark-ollama-tuning.mts"
   },
   "dependencies": {
