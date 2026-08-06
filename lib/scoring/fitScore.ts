@@ -214,10 +214,41 @@ function entityMatchesProfile(
   if (skillSet.has(e)) return true;
   if (profileBlob.includes(e)) return true;
 
+  const stop = new Set([
+    "and",
+    "or",
+    "the",
+    "of",
+    "for",
+    "with",
+    "to",
+    "in",
+    "a",
+    "an",
+    "technologies",
+    "technology",
+    "systems",
+    "system",
+    "skills",
+    "skill",
+    "knowledge",
+    "experience",
+    "software",
+    "hardware",
+    "solutions",
+    "solution",
+    "tools",
+    "tool",
+    "platforms",
+    "platform",
+    "applications",
+    "application",
+  ]);
+
   const tokens = e
     .split(/[^a-z0-9+.#/]+/i)
     .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length >= 2);
+    .filter((t) => t.length >= 2 && !stop.has(t));
 
   if (tokens.length === 0) return false;
   if (tokens.length === 1) {

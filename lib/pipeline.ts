@@ -524,7 +524,12 @@ export function parseSemanticFitReviewPayload(
         : rawBreakdown.length > 0
           ? rawBreakdown
           : `VETO: ${vetoReason ?? "Hard constraint violation."}\nFinal Score: 0%.`;
-  } else if (!rawBreakdown || !isCompleteMathematicalBreakdown(rawBreakdown)) {
+  } else if (
+    !scoreComponentsEarly ||
+    !rawBreakdown ||
+    !isCompleteMathematicalBreakdown(rawBreakdown)
+  ) {
+    // Always rewrite when components are missing so Final Score cannot disagree with fit_score.
     const sourceNote = scoreComponentsEarly
       ? "model breakdown incomplete"
       : "model omitted score_components; using server baseline fit_score";
