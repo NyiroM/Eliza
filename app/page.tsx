@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DiscoveryHubPanel from "@/app/components/DiscoveryHubPanel";
 import JobInputHighlighter from "@/app/components/JobInputHighlighter";
+import { LanAccessPanel } from "@/app/components/LanAccessPanel";
 import { SalaryForecastCard } from "@/app/components/SalaryForecastCard";
 import { DEFAULT_OLLAMA_MODEL } from "@/config/constants";
 import {
@@ -1105,6 +1106,7 @@ export default function DashboardPage() {
               {profileNotice.text}
             </p>
           ) : null}
+          <LanAccessPanel />
           <nav className="flex flex-wrap gap-2 border-b border-slate-800 pb-2" aria-label="Dashboard sections">
             <button
               type="button"

@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **LAN UI access (step 1)** — `npm run dev` / `npm start` bind to **`0.0.0.0`** so other devices on the same Wi‑Fi can open the dashboard. Optional **`ELIZA_GATE_PASSWORD`** enables a browser login gate (`/login`, httpOnly cookie). Dashboard **Network access** panel lists LAN URLs (`GET /api/server-info`). Auth helpers under **`lib/auth/`**; **`proxy.ts`** allows same-origin LAN Origins and enforces the gate. Worldwide / WAN access deferred to step 2.
+- Scripts **`dev:localhost`** / **`start:localhost`** for loopback-only binds.
+
 ## [0.5.0] — 2026-05-15
 
 ### Added

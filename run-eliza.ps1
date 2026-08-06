@@ -7,8 +7,9 @@
   - Sets the working directory to this script's folder (project root).
   - Removes .next for a clean dev cache.
   - Stops any process listening on TCP port 3000.
-  - Launches npm run dev in a new persistent PowerShell window.
+  - Launches npm run dev in a new persistent PowerShell window (listens on 0.0.0.0 for LAN).
   - Waits 3 seconds, then opens http://localhost:3000 in the default browser.
+  - Set ELIZA_GATE_PASSWORD in .env.local so phones/other PCs on the same Wi-Fi can open the UI after a password.
 #>
 
 Set-StrictMode -Version Latest
@@ -77,6 +78,9 @@ Start-Sleep -Seconds 3
 
 Write-Host "Opening http://localhost:3000 ..." -ForegroundColor Cyan
 Start-Process "http://localhost:3000/"
+
+Write-Host "LAN: other devices on this Wi-Fi can use http://<this-PC-LAN-IP>:3000 (see dashboard Network access panel)." -ForegroundColor DarkCyan
+Write-Host "Set ELIZA_GATE_PASSWORD in .env.local before exposing the UI on your LAN." -ForegroundColor DarkYellow
 
 Write-Host "Launcher finished. Use the other PowerShell window for dev server logs." -ForegroundColor Green
 

@@ -17,6 +17,7 @@
 - **No cloud inference required** — PDF CV parsing and LLM calls stay on your network when Ollama runs locally.
 - **Discovery Hub** — optional **Indeed**, **LinkedIn**, and **Profession.hu** sync into a local catalog, queued fit evaluation against your CV, and a **New matches** list with veto-aware scoring (same pipeline as manual paste).
 - **Multiple local profiles** — dashboard **Active profile** + **New profile**; each profile has its own tree under `storage/users/<id>/` (CV, preferences, discovery catalog, domain JSON). The UI sends **`X-Eliza-Active-User`** on user-scoped API calls; list/create profiles via **`GET` / `POST /api/users`**.
+- **LAN dashboard access (step 1)** — the Next.js server listens on **`0.0.0.0`** so other devices on the same Wi‑Fi can open the UI in a browser; optional **`ELIZA_GATE_PASSWORD`** shows a login screen. Backend + Ollama stay on the host PC. Internet-wide access is planned as step 2.
 
 ---
 
@@ -239,9 +240,27 @@ npm run dev
 
 Open **http://localhost:3000**, upload a **PDF CV**, paste a job description, pick **`deepseek-r1:8b`** (or another installed tag), and run analysis.
 
+### LAN access (same Wi‑Fi — step 1)
+
+The full app (UI + API + storage + Ollama client) runs on **one host machine**. Other phones/laptops on the **same private network** can open the dashboard in a browser.
+
+1. On the host: `cp .env.example .env.local` and set a shared gate password:
+
+   ```bash
+   ELIZA_GATE_PASSWORD=choose-a-strong-password
+   ```
+
+2. Start the server (`npm run dev` or `start-eliza.bat`). It binds to **`0.0.0.0:3000`** (use **`npm run dev:localhost`** if you want loopback-only).
+
+3. On the host dashboard, open the **Network access** panel and copy a **LAN** URL (e.g. `http://192.168.1.42:3000`).
+
+4. On another device on the same Wi‑Fi, open that URL, enter the gate password at **`/login`**, then use the dashboard as usual.
+
+**Notes:** Step 1 uses plain HTTP on your LAN (password travels in cleartext on the Wi‑Fi). Do not port-forward the host to the public internet yet — **step 2** will add remote access. Windows Firewall may need to allow Node on port **3000** for private networks.
+
 ### Environment
 
-See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://127.0.0.1:11434` (avoid `0.0.0.0`; use `127.0.0.1` or `localhost` for the client).
+See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://127.0.0.1:11434` (avoid `0.0.0.0`; use `127.0.0.1` or `localhost` for the client). Set **`ELIZA_GATE_PASSWORD`** when sharing the UI on your LAN.
 
 ### Chrome extension
 
@@ -259,10 +278,12 @@ Load **`apps/extension/dist`** as an unpacked extension. Set **`VITE_ELIZA_API_U
 
 | Command | Description |
 |---------|-------------|
-| `start-eliza.bat` / `run-eliza.ps1` | Windows: clean **`.next`**, free port **3000**, **`npm run dev`** in a new window, open the app in the browser |
-| `npm run dev` | Next.js development server |
+| `start-eliza.bat` / `run-eliza.ps1` | Windows: clean **`.next`**, free port **3000**, **`npm run dev`** (LAN bind) in a new window, open the app in the browser |
+| `npm run dev` | Next.js development server on **`0.0.0.0:3000`** (LAN-reachable) |
+| `npm run dev:localhost` | Dev server bound to **`127.0.0.1` only** |
 | `npm run build` | Production build |
-| `npm run start` | Production server |
+| `npm run start` | Production server on **`0.0.0.0:3000`** |
+| `npm run start:localhost` | Production server on loopback only |
 | `npm run lint` | ESLint |
 | `npm run test:salary-oracle` | Salary Oracle self-test suite (fixture-based) |
 | `npm run test:salary-titles` | Title→benchmark match verifier |
