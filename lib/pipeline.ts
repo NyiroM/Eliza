@@ -499,12 +499,20 @@ export function parseSemanticFitReviewPayload(
   const matched = strList(o.matched_skills);
   const missing = strList(o.missing_skills);
 
+  const scoreComponentsEarly = parseScoreComponents(o.score_components);
+
   let fitScore =
     typeof o.fit_score === "number" && Number.isFinite(o.fit_score)
       ? Math.round(o.fit_score)
       : baseline.fit_score;
   if (vetoed) fitScore = 0;
-  else fitScore = Math.max(0, Math.min(100, fitScore));
+  else {
+    fitScore = Math.max(0, Math.min(100, fitScore));
+    // Ungrounded headline scores (no score_components) → trust deterministic baseline.
+    if (!scoreComponentsEarly) {
+      fitScore = baseline.fit_score;
+    }
+  }
 
   const rawBreakdown =
     typeof o.mathematical_breakdown === "string" ? o.mathematical_breakdown.trim() : "";
@@ -517,10 +525,12 @@ export function parseSemanticFitReviewPayload(
           ? rawBreakdown
           : `VETO: ${vetoReason ?? "Hard constraint violation."}\nFinal Score: 0%.`;
   } else if (!rawBreakdown || !isCompleteMathematicalBreakdown(rawBreakdown)) {
-    // Keep score and stub breakdown aligned (avoid "baseline 40% / applied 80%" contradictions).
+    const sourceNote = scoreComponentsEarly
+      ? "model breakdown incomplete"
+      : "model omitted score_components; using server baseline fit_score";
     breakdown =
-      `Breakdown generation failed.\n` +
-      `1) Base Skill Match Score (required-only semantic overlap): ${fitScore}% (provisional; model omitted score_components)\n` +
+      `Breakdown generation failed (${sourceNote}).\n` +
+      `1) Base Skill Match Score (required-only semantic overlap): ${fitScore}% (provisional)\n` +
       `2) Skill Overlap: 0% (not provided by model)\n` +
       `3) Experience Match: 0% (not provided by model)\n` +
       `4) Constraint Adjustments (location, job type, work model): 0% (not provided by model)\n` +
@@ -601,7 +611,7 @@ export function parseSemanticFitReviewPayload(
   irrelevantExtraSkills.sort();
 
   let fitScoreReconciled = false;
-  const scoreComponents = parseScoreComponents(o.score_components);
+  const scoreComponents = scoreComponentsEarly;
   if (!vetoed && scoreComponents) {
     const llmDeclaredRaw =
       typeof o.fit_score === "number" && Number.isFinite(o.fit_score) ? Math.round(o.fit_score) : null;

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Semantic fit breakdown stub** — incomplete model breakdowns no longer show conflicting “baseline X% / applied Y%” lines; provisional 7-line arithmetic matches `fit_score`. “Rejected” wording is stripped when `vetoed=false`.
+- **Semantic fit breakdown stub** — incomplete model breakdowns no longer show conflicting “baseline X% / applied Y%” lines; provisional 7-line arithmetic matches `fit_score`. When the model omits `score_components`, the server uses the **deterministic baseline** fit score instead of an ungrounded LLM headline. “Rejected” wording is stripped when `vetoed=false`.
 - **Ollama Undici headers timeout** — HTTP client `headersTimeout` / `bodyTimeout` aligned with **`OLLAMA_TIMEOUT_MS`** so slow CPU generates are not killed at the Undici ~300s default before the AbortController fires.
 
 ## [0.5.0] — 2026-05-15
