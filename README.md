@@ -17,7 +17,7 @@
 - **No cloud inference required** — PDF CV parsing and LLM calls stay on your network when Ollama runs locally.
 - **Discovery Hub** — optional **Indeed**, **LinkedIn**, and **Profession.hu** sync into a local catalog, queued fit evaluation against your CV, and a **New matches** list with veto-aware scoring (same pipeline as manual paste).
 - **Multiple local profiles** — dashboard **Active profile** + **New profile**; each profile has its own tree under `storage/users/<id>/` (CV, preferences, discovery catalog, domain JSON). The UI sends **`X-Eliza-Active-User`** on user-scoped API calls; list/create profiles via **`GET` / `POST /api/users`**.
-- **LAN dashboard access (step 1)** — the Next.js server listens on **`0.0.0.0`** so other devices on the same Wi‑Fi can open the UI in a browser; optional **`ELIZA_GATE_PASSWORD`** shows a login screen. Backend + Ollama stay on the host PC. Internet-wide access is planned as step 2.
+- **LAN + remote dashboard access** — the Next.js server listens on **`0.0.0.0`** so other devices on the same Wi‑Fi can open the UI; optional **`ELIZA_GATE_PASSWORD`** shows a login screen. Away from home: use **Tailscale** (personal mesh) — no router port forward. Backend + Ollama stay on the host PC.
 
 ---
 
@@ -256,11 +256,22 @@ The full app (UI + API + storage + Ollama client) runs on **one host machine**. 
 
 4. On another device on the same Wi‑Fi, open that URL, enter the gate password at **`/login`**, then use the dashboard as usual.
 
-**Notes:** Step 1 uses plain HTTP on your LAN (password travels in cleartext on the Wi‑Fi). Do not port-forward the host to the public internet yet — **step 2** will add remote access. Windows Firewall may need to allow Node on port **3000** for private networks.
+**Notes:** Step 1 uses plain HTTP on your LAN (password travels in cleartext on the Wi‑Fi). Windows Firewall may need to allow Node on port **3000** for private networks. **Do not** port-forward 3000 on your router — use Tailscale for remote access (step 2).
+
+### Remote access (Tailscale — step 2)
+
+For **single-user** access away from home, put the host and your phone/laptop on a **Tailscale** mesh. ELIZA stays off the public internet; no DynDNS and **no router WAN port forward**.
+
+1. On the **ELIZA host**: install [Tailscale](https://tailscale.com), sign in, confirm `tailscale status` shows a `100.x` address (and MagicDNS name if enabled).
+2. Keep **`ELIZA_GATE_PASSWORD`** set. Run ELIZA (`npm run start` for a long-lived host, or `npm run dev`). Ollama stays on this machine (`OLLAMA_HOST=http://127.0.0.1:11434`).
+3. On your **phone or remote laptop**: install Tailscale with the **same account**, connect, then open a **Tailscale** URL from the host dashboard **Network access** panel (e.g. `http://100.x.y.z:3000`), or MagicDNS / optional **Tailscale Serve** HTTPS (`https://<machine>.<tailnet>.ts.net`).
+4. Sign in at **`/login`**, then use the dashboard as on LAN.
+
+**Router:** leave WAN closed for ELIZA — no port forward / DMZ / UPnP to port 3000. Optional: DHCP reservation for the host LAN IP (helpful for step 1, not required for Tailscale).
 
 ### Environment
 
-See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://127.0.0.1:11434` (avoid `0.0.0.0`; use `127.0.0.1` or `localhost` for the client). Set **`ELIZA_GATE_PASSWORD`** when sharing the UI on your LAN.
+See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://127.0.0.1:11434` (avoid `0.0.0.0`; use `127.0.0.1` or `localhost` for the client). Set **`ELIZA_GATE_PASSWORD`** when sharing the UI on LAN or Tailscale.
 
 ### Running on weak / CPU-only hardware
 

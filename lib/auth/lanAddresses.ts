@@ -1,4 +1,4 @@
-// lib/auth/lanAddresses.ts — advertise LAN URLs for phones/laptops on the same Wi‑Fi.
+// lib/auth/lanAddresses.ts — advertise LAN + Tailscale URLs for remote browsers.
 
 import os from "os";
 
@@ -13,24 +13,46 @@ function isUsableLanIPv4(address: string, internal: boolean): boolean {
   return false;
 }
 
-/** IPv4 addresses on this host that peers on the LAN can typically open. */
-export function listLanIPv4Addresses(): string[] {
+/** Tailscale CGNAT 100.64.0.0/10 on this host. */
+function isTailscaleIPv4Address(address: string, internal: boolean): boolean {
+  if (internal) return false;
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(address)) return false;
+  const [a, b] = address.split(".").map(Number);
+  return a === 100 && b >= 64 && b <= 127;
+}
+
+function collectIPv4(predicate: (address: string, internal: boolean) => boolean): string[] {
   const out: string[] = [];
   const ifaces = os.networkInterfaces();
   for (const entries of Object.values(ifaces)) {
     if (!entries) continue;
     for (const e of entries) {
       if (e.family !== "IPv4" && (e.family as unknown) !== 4) continue;
-      if (!isUsableLanIPv4(e.address, e.internal)) continue;
+      if (!predicate(e.address, e.internal)) continue;
       if (!out.includes(e.address)) out.push(e.address);
     }
   }
   return out;
 }
 
+/** IPv4 addresses on this host that peers on the LAN can typically open. */
+export function listLanIPv4Addresses(): string[] {
+  return collectIPv4(isUsableLanIPv4);
+}
+
+/** Tailscale interface IPv4 addresses (if Tailscale is installed and up). */
+export function listTailscaleIPv4Addresses(): string[] {
+  return collectIPv4(isTailscaleIPv4Address);
+}
+
 export function buildLanAccessUrls(port: number): string[] {
   const p = Number.isFinite(port) && port > 0 ? port : 3000;
   return listLanIPv4Addresses().map((ip) => `http://${ip}:${p}`);
+}
+
+export function buildTailscaleAccessUrls(port: number): string[] {
+  const p = Number.isFinite(port) && port > 0 ? port : 3000;
+  return listTailscaleIPv4Addresses().map((ip) => `http://${ip}:${p}`);
 }
 
 export function resolveListenPort(): number {

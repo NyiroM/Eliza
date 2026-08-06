@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **LAN UI access (step 1)** — `npm run dev` / `npm start` bind to **`0.0.0.0`** so other devices on the same Wi‑Fi can open the dashboard. Optional **`ELIZA_GATE_PASSWORD`** enables a browser login gate (`/login`, httpOnly cookie). Dashboard **Network access** panel lists LAN URLs (`GET /api/server-info`). Auth helpers under **`lib/auth/`**; **`proxy.ts`** allows same-origin LAN Origins and enforces the gate. Worldwide / WAN access deferred to step 2.
+- **LAN UI access (step 1)** — `npm run dev` / `npm start` bind to **`0.0.0.0`** so other devices on the same Wi‑Fi can open the dashboard. Optional **`ELIZA_GATE_PASSWORD`** enables a browser login gate (`/login`, httpOnly cookie). Dashboard **Network access** panel lists LAN URLs (`GET /api/server-info`). Auth helpers under **`lib/auth/`**; **`proxy.ts`** allows same-origin LAN Origins and enforces the gate.
+- **Tailscale remote access (step 2)** — same-origin allow for Tailscale CGNAT (`100.64.0.0/10`) and **`*.ts.net`**; dashboard lists Tailscale URLs when the host has a Tailscale IP. Personal mesh only — **no router port forward**. Docs cover host + phone setup and optional Tailscale Serve HTTPS.
 - Scripts **`dev:localhost`** / **`start:localhost`** for loopback-only binds.
 - **Ollama runtime tuning env knobs** (`lib/llm/ollama.ts`) — **`OLLAMA_TIMEOUT_MS`**, **`OLLAMA_NUM_PREDICT`** (num_predict ceiling), and **`OLLAMA_NUM_CTX`** now override the previously hardcoded defaults (all clamped to safe ranges). Documented in **`.env.example`**. Helps run the pipeline on weak / CPU-only hardware.
 - **`ELIZA_OLLAMA_FORCE_SCHEMA`** — when truthy, JSON-Schema-constrained output is applied to the relevance and semantic-fit calls on **every** model, not just the schema-tuned `gemma` / `qwen2.5` / `llama3.1:8b` families. Prevents unconstrained small models (e.g. `llama3.2`) from generating until the timeout.

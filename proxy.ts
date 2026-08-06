@@ -9,7 +9,7 @@ import {
 import { verifyGateToken } from "./lib/auth/gateToken";
 import {
   isLoopbackOrigin,
-  isPrivateLanHostname,
+  isTrustedMeshHostname,
   originMatchesRequestHost,
 } from "./lib/auth/lanOrigins";
 
@@ -43,7 +43,7 @@ function getAllowedOrigin(request: NextRequest): string | null {
   if (originMatchesRequestHost(origin, request.headers.get("host"))) {
     try {
       const host = new URL(origin).hostname;
-      if (isPrivateLanHostname(host) || isLoopbackOrigin(origin)) return origin;
+      if (isTrustedMeshHostname(host) || isLoopbackOrigin(origin)) return origin;
     } catch {
       return null;
     }
