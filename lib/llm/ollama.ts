@@ -5,14 +5,41 @@ import { extractCompleteJSON } from "./extractCompleteJSON";
 import { isBackendLlmVerboseLog } from "../logging/backendLlmVerbose";
 import { redactSensitiveData } from "../security/redactSensitiveData";
 
-/** Single ceiling for every Ollama HTTP call from this module (generate + tags). */
-export const OLLAMA_TIMEOUT = 300_000;
+/** Parses a positive-integer env override, clamped to [min, max]; falls back when unset/invalid. */
+function parseIntEnv(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = parseInt(raw ?? "", 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
 
-/** Safety ceiling for num_predict (unlimited is -1 in Ollama). */
-export const OLLAMA_MAX_PREDICT = 8192;
+/** Truthy env flag helper (`1`, `true`, `yes`, `on`; case-insensitive). */
+function isTruthyEnv(raw: string | undefined): boolean {
+  const s = (raw ?? "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
 
-/** Default context window for all Ollama calls. */
-export const OLLAMA_NUM_CTX = 16384;
+/**
+ * Single ceiling for every Ollama HTTP call from this module (generate + tags).
+ * Override with `OLLAMA_TIMEOUT_MS` (e.g. lower on fast GPUs, higher on slow CPUs).
+ */
+export const OLLAMA_TIMEOUT = parseIntEnv(process.env.OLLAMA_TIMEOUT_MS, 300_000, 5_000, 1_800_000);
+
+/**
+ * Safety ceiling for num_predict. Override with `OLLAMA_NUM_PREDICT` — lower it on weak
+ * hardware to stop unconstrained models from generating until the timeout.
+ */
+export const OLLAMA_MAX_PREDICT = parseIntEnv(process.env.OLLAMA_NUM_PREDICT, 8192, 64, 32_768);
+
+/** Default context window for all Ollama calls. Override with `OLLAMA_NUM_CTX`. */
+export const OLLAMA_NUM_CTX = parseIntEnv(process.env.OLLAMA_NUM_CTX, 16384, 512, 131_072);
+
+/**
+ * When `ELIZA_OLLAMA_FORCE_SCHEMA` is truthy, structured JSON-Schema output is used for the
+ * relevance and semantic-fit calls on *every* model — not just the schema-tuned families.
+ * Helps small/unconstrained models (e.g. `llama3.2`) emit bounded, terminating JSON on CPU.
+ */
+export function isForceSchemaEnabled(): boolean {
+  return isTruthyEnv(process.env.ELIZA_OLLAMA_FORCE_SCHEMA);
+}
 
 /** Semantic / job–CV analysis (`role: analysis`) — Cell_Robot_Flow_V2 benchmark winner. */
 export const OLLAMA_SEMANTIC_TEMPERATURE = 0.1;
@@ -204,6 +231,9 @@ export const RELEVANCE_SCORE_JSON_SCHEMA: Record<string, unknown> = {
 
 /** Schema-capable families for relevance tuning; others use `format: "json"`. */
 export function getRelevanceScoreOllamaFormat(model: string): "json" | Record<string, unknown> {
+  if (isForceSchemaEnabled()) {
+    return RELEVANCE_SCORE_JSON_SCHEMA;
+  }
   const m = model.toLowerCase();
   if (isLlama31_8B(m) || isGemmaModel(m) || isQwen25Family(m)) {
     return RELEVANCE_SCORE_JSON_SCHEMA;
@@ -297,6 +327,9 @@ export const SEMANTIC_FIT_REVIEW_JSON_SCHEMA: Record<string, unknown> = {
  * ~2300 chars on long postings.
  */
 export function getSemanticFitReviewOllamaFormat(model: string): "json" | Record<string, unknown> {
+  if (isForceSchemaEnabled()) {
+    return SEMANTIC_FIT_REVIEW_JSON_SCHEMA;
+  }
   const m = model.toLowerCase();
   if (isLlama31_8B(m) || isGemmaModel(m) || isQwen25Family(m)) {
     return SEMANTIC_FIT_REVIEW_JSON_SCHEMA;
