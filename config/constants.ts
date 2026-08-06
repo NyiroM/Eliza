@@ -3,8 +3,12 @@
  * Import from here instead of scattering magic numbers across `lib/`.
  */
 
-/** Default Ollama model tag when none is provided or discovery fails (dashboard can override via user preferences). */
-export const DEFAULT_OLLAMA_MODEL = "gemma4:e4b";
+/**
+ * Default Ollama model tag when none is provided or discovery fails (dashboard can override
+ * via user preferences). `gemma3n:e4b` is a real, lightweight, schema-tuned Gemma tag; the
+ * previous `gemma4:e4b` value is not a valid Ollama model and always failed the install check.
+ */
+export const DEFAULT_OLLAMA_MODEL = "gemma3n:e4b";
 
 /** Ollama client HTTP timeout (all `/api/*` calls): see `OLLAMA_TIMEOUT` in `lib/llm/ollama.ts`. */
 
