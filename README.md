@@ -262,6 +262,14 @@ The full app (UI + API + storage + Ollama client) runs on **one host machine**. 
 
 See **`.env.example`**. Set **`OLLAMA_HOST`** if Ollama is not at `http://127.0.0.1:11434` (avoid `0.0.0.0`; use `127.0.0.1` or `localhost` for the client). Set **`ELIZA_GATE_PASSWORD`** when sharing the UI on your LAN.
 
+### Running on weak / CPU-only hardware
+
+Without a GPU, inference is much slower and small models can misbehave. Tips:
+
+- **Pick a small, schema-tuned model.** Only the **`gemma`**, **`qwen2.5`**, and **`llama3.1:8b`** families get JSON-Schema-constrained output for the semantic-fit / relevance calls; other tags (e.g. `llama3.2`) may generate until the timeout. **`qwen2.5:3b`** runs a full pipeline analysis in roughly a minute on a modern 4-core CPU. Select it via the dashboard model dropdown (or `POST /api/user-preferences`).
+- **Force schema on any model** with **`ELIZA_OLLAMA_FORCE_SCHEMA=1`** to keep unconstrained models bounded.
+- **Tune the runtime** with **`OLLAMA_TIMEOUT_MS`**, **`OLLAMA_NUM_PREDICT`** (lower to cap generation length), and **`OLLAMA_NUM_CTX`** (see `.env.example`).
+
 ### Chrome extension
 
 ```bash
