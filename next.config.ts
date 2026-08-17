@@ -2,26 +2,47 @@ import type { NextConfig } from "next";
 import fs from "fs";
 import path from "path";
 
+function isAppRoot(dir: string): boolean {
+  return (
+    fs.existsSync(path.join(dir, "package.json")) &&
+    (fs.existsSync(path.join(dir, "next.config.ts")) ||
+      fs.existsSync(path.join(dir, "next.config.mjs")) ||
+      fs.existsSync(path.join(dir, "next.config.js")))
+  );
+}
+
+/** Walk up from `start` until this app's next.config + package.json. */
+function walkToAppRoot(start: string): string | null {
+  let dir = path.resolve(start);
+  for (let i = 0; i < 8; i++) {
+    if (isAppRoot(dir)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 /**
- * Prefer `process.cwd()` when it is clearly this app (Next config + package.json there);
- * otherwise use this file's directory so resolution stays correct if the shell cwd is a parent folder.
+ * Root of this copy of the app — from this config file, not cwd.
+ * Cwd-first pinning kept writing `.next` to an old drive after the project was moved.
  */
 function resolveProjectRoot(): string {
-  const cwd = path.resolve(process.cwd());
-  const hasPkg = fs.existsSync(path.join(cwd, "package.json"));
-  const hasThisConfig =
-    fs.existsSync(path.join(cwd, "next.config.ts")) ||
-    fs.existsSync(path.join(cwd, "next.config.mjs")) ||
-    fs.existsSync(path.join(cwd, "next.config.js"));
-  if (hasPkg && hasThisConfig) return cwd;
-  return path.resolve(__dirname);
+  const fromConfig = walkToAppRoot(__dirname);
+  if (fromConfig) return fromConfig;
+  const fromCwd = walkToAppRoot(process.cwd());
+  if (fromCwd) return fromCwd;
+  return path.resolve(process.cwd());
 }
 
 const projectRoot = resolveProjectRoot();
 
 const nextConfig: NextConfig = {
+  // Allow LAN IP access to Next.js HMR /dev resources (phone, other PC on same network)
+  allowedDevOrigins: ["192.168.50.166"],
   serverExternalPackages: ["playwright", "playwright-core"],
   transpilePackages: ["tailwindcss", "@tailwindcss/postcss"],
+  outputFileTracingRoot: projectRoot,
   /**
    * Dev only: suppress high-frequency / low-signal request lines (RSC root, domain JSON,
    * discovery lists, pipeline POST timing) so errors and intentional `[discovery]` logs stand out.
