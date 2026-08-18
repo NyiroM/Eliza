@@ -82,6 +82,9 @@ assert.equal(isIndeedChallengeHtml("<title>Security Check - Indeed.com</title>")
 const mosaicHtml = `<script>window.mosaic={}; var x={"jobDescription":"<p>Maintain production Python services and CI pipelines.</p>"};</script>`;
 assert.match(extractIndeedDescriptionFromHtml(mosaicHtml) ?? "", /production Python services/);
 
+const mosaicTextKey = `<script>var x={"jobDescriptionText":"<p>Own the Kubernetes platform, CI pipelines, and production services.</p>"};</script>`;
+assert.match(extractIndeedDescriptionFromHtml(mosaicTextKey) ?? "", /Kubernetes platform/);
+
 const professionHtml = `<article><p>Magyar és angol nyelvtudás elvárás.</p></article>`;
 assert.match(extractProfessionDescriptionFromHtml(professionHtml) ?? "", /angol nyelvtudás/);
 

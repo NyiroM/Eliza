@@ -1,8 +1,7 @@
-// lib/discovery/sources/indeedDetail.ts — Indeed HU viewjob detail text (HTTP + optional Playwright).
+// lib/discovery/sources/indeedDetail.ts — Indeed HU viewjob/SERP detail text (HTTP only).
 import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
 import { INDEED_HU_ORIGIN, indeedJkFromJobUrl, indeedSerpVjkUrl } from "./indeedJobUrl";
 import { extractIndeedDescriptionFromHtml } from "./indeedDetailParse";
-import { fetchJobDetailBodyPlaywright } from "./jobDetailPlaywright";
 
 export { extractIndeedDescriptionFromHtml } from "./indeedDetailParse";
 
@@ -44,14 +43,7 @@ export async function enrichIndeedJobDescription(jobUrl: string): Promise<string
     const msg = e instanceof Error ? e.message : String(e);
     console.warn("[indeedDetail] HTTP enrich failed", detailUrl.slice(0, 80), msg);
   }
-
-  try {
-    const fromSerpPw = await fetchJobDetailBodyPlaywright(indeedSerpVjkUrl(jk), "indeed");
-    if (fromSerpPw) return fromSerpPw;
-    return await fetchJobDetailBodyPlaywright(detailUrl, "indeed");
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.warn("[indeedDetail] Playwright enrich failed", detailUrl.slice(0, 80), msg);
-    return null;
-  }
+  // Isolated Playwright `/viewjob` and cold `jobs?vjk=` hit Security Check.
+  // Batch eval uses hydrateIndeedJobsViaSerpVjk (search session + card click) instead.
+  return null;
 }

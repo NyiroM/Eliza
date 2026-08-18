@@ -6,8 +6,16 @@ import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discover
 import { saveDiscoveryZeroResultScreenshot } from "../debugScreenshot";
 import { stableJobId } from "../id";
 import { indeedLocationParamFromPreference } from "../locationPreferenceShared";
-import { indeedJkFromJobUrl, indeedSerpVjkUrl, resolveIndeedJobUrl } from "./indeedJobUrl";
+import { isThinDiscoveryDescription } from "../descriptionQuality";
+import {
+  INDEED_HU_ORIGIN,
+  indeedJkFromJobUrl,
+  indeedSearchUrlFromListingBlurb,
+  indeedSerpVjkOnSearchUrl,
+  resolveIndeedJobUrl,
+} from "./indeedJobUrl";
 import { extractIndeedDescriptionFromHtml, isIndeedChallengeHtml } from "./indeedDetailParse";
+import { progressCatalogHydrate } from "../progress";
 import {
   humanPause,
   initNavigatorWebdriverPatch,
@@ -55,14 +63,14 @@ const JOB_CARD_LINK_SELECTORS = [
 ] as const;
 
 /**
- * Hydrate a few JDs from the SERP split pane (same session that already passed Indeed).
- * Isolated `/viewjob` Playwright at eval often lands on Security Check.
- * Default cap 4; set `ELIZA_INDEED_DETAIL_VISITS=0` to skip.
+ * Hydrate JDs from the SERP split pane in the same session that already passed Indeed.
+ * Isolated Playwright after the listing browser closes hits Security Check.
+ * Default: every card on the page. `ELIZA_INDEED_DETAIL_VISITS=0` skips; a number caps clicks.
  */
 function indeedDetailVisitCap(listingCount: number): number {
   const raw = parseInt(process.env.ELIZA_INDEED_DETAIL_VISITS ?? "", 10);
-  const cap = Number.isFinite(raw) ? raw : 4;
-  return Math.max(0, Math.min(listingCount, cap));
+  if (Number.isFinite(raw)) return Math.max(0, Math.min(listingCount, raw));
+  return listingCount;
 }
 
 function indeedCardTitle($: cheerio.CheerioAPI, a: Element): string {
@@ -84,42 +92,94 @@ function indeedCardMeta(
   return { company, location, snippet };
 }
 
+async function indeedPageLooksChallenged(page: Page): Promise<boolean> {
+  const html = await page.content();
+  if (isIndeedChallengeHtml(html)) return true;
+  return /security check/i.test(await page.title());
+}
+
+async function readIndeedJdFromPage(page: Page): Promise<string | null> {
+  if (await indeedPageLooksChallenged(page)) return null;
+  await page
+    .waitForSelector("#jobDescriptionText, [data-testid='jobsearch-JobComponent-description']", {
+      timeout: 8_000,
+    })
+    .catch(() => {});
+  if (await indeedPageLooksChallenged(page)) return null;
+  const fromParser = extractIndeedDescriptionFromHtml(await page.content());
+  if (fromParser && !isThinDiscoveryDescription(fromParser, "indeed")) return fromParser;
+  const raw = await page.evaluate(() => {
+    const candidates = [
+      document.querySelector("#jobDescriptionText"),
+      document.querySelector("[data-testid='jobsearch-JobComponent-description']"),
+      document.querySelector(".jobsearch-JobComponent-description"),
+      document.querySelector(".jobsearch-jobDescriptionText"),
+      document.querySelector("#job-details"),
+    ].filter((el): el is HTMLElement => el instanceof HTMLElement);
+    for (const el of candidates) {
+      const t = (el.innerText || "").trim();
+      if (t.length > 120) return t.slice(0, 14_000);
+    }
+    return "";
+  });
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed.length > 120 && !/security check/i.test(trimmed.slice(0, 400))) {
+    if (!isThinDiscoveryDescription(trimmed, "indeed")) return trimmed;
+  }
+  return fromParser && fromParser.length > 120 ? fromParser : null;
+}
+
+async function warmIndeedSearchSession(
+  page: Page,
+  searchUrl: string | null,
+  dismissCookies: boolean,
+): Promise<boolean> {
+  const url = searchUrl || `${INDEED_HU_ORIGIN}/jobs?q=developer&l=Budapest`;
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 75_000 });
+  if (dismissCookies) {
+    await dismissIndeedCookies(page);
+    await sleep(500);
+  } else {
+    await sleep(250);
+  }
+  if (await indeedPageLooksChallenged(page)) return false;
+  await page
+    .waitForSelector("a[data-jk], .job_seen_beacon, #mosaic-provider-jobcards", { timeout: 10_000 })
+    .catch(() => {});
+  return !(await indeedPageLooksChallenged(page));
+}
+
+async function openIndeedJdOnSerp(page: Page, jk: string, searchUrl: string | null): Promise<string | null> {
+  if (await indeedPageLooksChallenged(page)) return null;
+  try {
+    await page.locator(`a[data-jk="${jk}"]`).first().click({ timeout: 4000 });
+    await sleep(450);
+    const fromClick = await readIndeedJdFromPage(page);
+    if (fromClick) return fromClick;
+  } catch {
+    /* card not on this SERP page */
+  }
+  if (await indeedPageLooksChallenged(page)) return null;
+  await page.goto(indeedSerpVjkOnSearchUrl(searchUrl, jk), { waitUntil: "domcontentloaded", timeout: 75_000 });
+  await sleep(400);
+  return readIndeedJdFromPage(page);
+}
+
 async function hydrateIndeedJobsFromSerpPanel(page: Page, jobs: DiscoveredJob[], cap: number): Promise<void> {
-  let consecutiveMisses = 0;
   for (let i = 0; i < Math.min(cap, jobs.length); i += 1) {
     const job = jobs[i];
-    let jk = "";
-    try {
-      jk = new URL(job.url).searchParams.get("jk") ?? "";
-    } catch {
-      continue;
-    }
+    const jk = indeedJkFromJobUrl(job.url);
     if (!jk) continue;
+    const searchUrl = indeedSearchUrlFromListingBlurb(job.description ?? "");
     try {
-      await page.locator(`a[data-jk="${jk}"]`).first().click({ timeout: 4000 });
-      await sleep(450);
-      await page
-        .waitForSelector("#jobDescriptionText, [data-testid='jobsearch-JobComponent-description']", {
-          timeout: 8000,
-        })
-        .catch(() => {});
-      const html = await page.content();
-      if (isIndeedChallengeHtml(html)) {
-        consecutiveMisses += 1;
-        if (consecutiveMisses >= 2) break;
-        continue;
-      }
-      const detailText = extractIndeedDescriptionFromHtml(html);
-      if (detailText && detailText.length > 120) {
+      const detailText = await openIndeedJdOnSerp(page, jk, searchUrl);
+      if (detailText && !isThinDiscoveryDescription(detailText, "indeed")) {
         job.description = detailText;
-        consecutiveMisses = 0;
-      } else {
-        consecutiveMisses += 1;
-        if (consecutiveMisses >= 3) break;
+      } else if (await indeedPageLooksChallenged(page)) {
+        break;
       }
     } catch {
-      consecutiveMisses += 1;
-      if (consecutiveMisses >= 3) break;
+      if (await indeedPageLooksChallenged(page)) break;
     }
   }
 }
@@ -254,54 +314,76 @@ export async function fetchIndeedJobsPlaywright(
 }
 
 /**
- * Catalog / eval hydrate: one browser, `jobs?vjk=` (search session), not isolated `/viewjob`.
+ * Catalog / eval hydrate: one browser, warm the listing search, then click cards / `q&vjk=`.
+ * Isolated `/viewjob` and cold `jobs?vjk=` hit Indeed Security Check.
  * Mutates `jobs` in place when a JD is found.
  */
 export async function hydrateIndeedJobsViaSerpVjk(jobs: DiscoveredJob[]): Promise<number> {
   const targets = jobs.filter((j) => j.provider === "indeed" && indeedJkFromJobUrl(j.url));
   if (targets.length === 0) return 0;
 
+  const groups = new Map<string, DiscoveredJob[]>();
+  for (const job of targets) {
+    const key = indeedSearchUrlFromListingBlurb(job.description ?? "") ?? "";
+    const arr = groups.get(key) ?? [];
+    arr.push(job);
+    groups.set(key, arr);
+  }
+
+  await progressCatalogHydrate({
+    index: 0,
+    total: targets.length,
+    filled: 0,
+    launching: true,
+  }).catch(() => {});
+
   const { browser, page } = await openIndeedPlaywrightSession();
   let hydrated = 0;
-  let consecutiveMisses = 0;
+  let processed = 0;
   try {
-    for (let i = 0; i < targets.length; i += 1) {
-      const job = targets[i];
-      const jk = indeedJkFromJobUrl(job.url);
-      if (!jk) continue;
-      try {
-        await page.goto(indeedSerpVjkUrl(jk), { waitUntil: "domcontentloaded", timeout: 75_000 });
-        if (i === 0) {
-          await dismissIndeedCookies(page);
-          await sleep(500);
+    let dismissCookies = true;
+    let stop = false;
+    for (const [searchKey, group] of groups) {
+      if (stop) break;
+      const searchUrl = searchKey || null;
+      const warmed = await warmIndeedSearchSession(page, searchUrl, dismissCookies);
+      dismissCookies = false;
+      if (!warmed) {
+        console.warn("[indeedCatalogHydrate] Security Check; skipping remaining catalog hydrate");
+        break;
+      }
+      for (const job of group) {
+        processed += 1;
+        const jk = indeedJkFromJobUrl(job.url);
+        await progressCatalogHydrate({
+          index: processed,
+          total: targets.length,
+          filled: hydrated,
+          title: job.title,
+        }).catch(() => {});
+        if (!jk) continue;
+        try {
+          const detailText = await openIndeedJdOnSerp(page, jk, searchUrl);
+          if (detailText && !isThinDiscoveryDescription(detailText, "indeed")) {
+            job.description = detailText;
+            hydrated += 1;
+          } else if (await indeedPageLooksChallenged(page)) {
+            console.warn("[indeedCatalogHydrate] Security Check; skipping remaining catalog hydrate");
+            stop = true;
+            break;
+          }
+        } catch {
+          /* next job */
         }
-        await sleep(400);
-        await page
-          .waitForSelector("#jobDescriptionText, [data-testid='jobsearch-JobComponent-description']", {
-            timeout: 10_000,
-          })
-          .catch(() => {});
-        const html = await page.content();
-        if (isIndeedChallengeHtml(html) || /security check/i.test(await page.title())) {
-          consecutiveMisses += 1;
-          if (consecutiveMisses >= 2) break;
-          continue;
-        }
-        const detailText = extractIndeedDescriptionFromHtml(html);
-        if (detailText && detailText.length > 120) {
-          job.description = detailText;
-          hydrated += 1;
-          consecutiveMisses = 0;
-        } else {
-          consecutiveMisses += 1;
-          if (consecutiveMisses >= 3) break;
-        }
-      } catch {
-        consecutiveMisses += 1;
-        if (consecutiveMisses >= 3) break;
       }
     }
   } finally {
+    await progressCatalogHydrate({
+      index: targets.length,
+      total: targets.length,
+      filled: hydrated,
+      done: true,
+    }).catch(() => {});
     await browser.close().catch(() => {});
   }
   return hydrated;

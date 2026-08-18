@@ -172,6 +172,83 @@ export function progressFetching(
   });
 }
 
+/** Indeed catalog JD hydrate (Playwright search session + card / q&vjk=), shown on the Fetch lane. */
+export async function progressCatalogHydrate(opts: {
+  index: number;
+  total: number;
+  filled: number;
+  title?: string;
+  launching?: boolean;
+  done?: boolean;
+}): Promise<void> {
+  const t = nowIso();
+  const prev = await readDiscoveryProgress();
+  const keepEvalPhase = prev.phase === "analyzing" || prev.phase === "draining";
+  const total = Math.max(0, opts.total);
+  const idx = Math.max(0, Math.min(opts.index, total || opts.index));
+  const title = (opts.title ?? "").trim();
+  const shortTitle = title.length > 48 ? `${title.slice(0, 48)}…` : title;
+
+  if (opts.done) {
+    await setDiscoveryProgress({
+      phase: keepEvalPhase ? prev.phase : "queueing",
+      message: total > 0 ? `Indeed descriptions: filled ${opts.filled}/${total}.` : prev.message,
+      fetchLane: {
+        status: "done",
+        task: "hydrate",
+        providers_total: 1,
+        providers_done: 1,
+        jobs_added: opts.filled,
+        current_provider: "indeed",
+        seed_index: total,
+        seed_total: total,
+        phrase: undefined,
+        providers: {
+          indeed: {
+            status: "done",
+            seed_index: total,
+            seed_total: total,
+            jobs_new: opts.filled,
+          },
+        },
+      },
+    });
+    return;
+  }
+
+  const msg = opts.launching
+    ? `Starting Chromium to fill up to ${total} Indeed job description(s)…`
+    : `Filling Indeed descriptions ${idx}/${total} (${opts.filled} filled)${shortTitle ? ` — ${shortTitle}` : ""}`;
+
+  await setDiscoveryProgress({
+    phase: keepEvalPhase ? prev.phase : "fetching",
+    message: msg,
+    step_started_at: t,
+    pipeline_run_started_at: prev.pipeline_run_started_at ?? t,
+    fetchLane: {
+      status: "running",
+      task: "hydrate",
+      providers_total: 1,
+      providers_done: 0,
+      jobs_added: opts.filled,
+      started_at: prev.fetchLane?.started_at && prev.fetchLane.task === "hydrate" ? prev.fetchLane.started_at : t,
+      current_provider: "indeed",
+      seed_index: idx,
+      seed_total: total,
+      phrase: opts.launching ? "Starting Chromium…" : shortTitle || "Indeed listing",
+      providers: {
+        indeed: {
+          status: "running",
+          seed_index: idx,
+          seed_total: total,
+          jobs_new: opts.filled,
+          seed_started_at: t,
+        },
+      },
+    },
+  });
+}
+
 export function progressQueueing(message: string, initSession?: boolean): Promise<void> {
   const t = nowIso();
   return setDiscoveryProgress({

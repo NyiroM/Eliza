@@ -80,6 +80,20 @@ function run(): void {
     assert.equal(indeedJkFromJobUrl(`https://hu.indeed.com/jobs?vjk=${REAL_JK}`), REAL_JK);
     assert.equal(indeedSerpVjkUrl(REAL_JK), `https://hu.indeed.com/jobs?vjk=${REAL_JK}`);
   }
+  {
+    const blurb = `Solution Architect\nCompany: NN Group\nLocation: Budapest\nIndeed: https://hu.indeed.com/jobs?q=Solution%20Architect&l=Budapest`;
+    const search = indeedJobUrl.indeedSearchUrlFromListingBlurb(blurb);
+    assert.ok(search);
+    assert.match(search, /q=Solution/);
+    const onSearch = indeedJobUrl.indeedSerpVjkOnSearchUrl(search, REAL_JK);
+    assert.match(onSearch, /vjk=852d19abda8aadcb/);
+    assert.match(onSearch, /q=Solution/);
+    assert.equal(
+      indeedJobUrl.indeedSerpVjkOnSearchUrl(null, REAL_JK),
+      indeedSerpVjkUrl(REAL_JK),
+    );
+    assert.equal(indeedJobUrl.indeedSearchUrlFromListingBlurb("no listing url"), null);
+  }
 }
 
 run();

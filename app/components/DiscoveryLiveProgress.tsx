@@ -16,12 +16,11 @@ const PROVIDER_SHORT: Record<DiscoveryProviderId, string> = {
 };
 
 /**
- * Fetch-lane ETA: listing-only search with one reused Chromium per Indeed/Profession sync.
- * JD enrich + Ollama stay on the eval lane. `cap` is the Playwright/HTTP budget if a seed hangs.
+ * Fetch-lane ETA: listing search plus in-session Indeed SERP JD clicks; Ollama stays on the eval lane.
  */
 const FETCH_PACE_MS: Record<DiscoveryProviderId, { first: number; next: number; cap: number }> = {
   linkedin: { first: 8_000, next: 6_000, cap: 45_000 },
-  indeed: { first: 28_000, next: 12_000, cap: 45_000 },
+  indeed: { first: 48_000, next: 36_000, cap: 90_000 },
   profession: { first: 35_000, next: 18_000, cap: 90_000 },
 };
 
@@ -279,6 +278,7 @@ export function DiscoveryLiveProgressBoard({
 
   const fetchLane = fetchFromLegacy(p);
   const evalLane = evalFromLegacy(p);
+  const hydrateTask = fetchLane.task === "hydrate";
   const runStart = parseIsoMs(p.pipeline_run_started_at) ?? parseIsoMs(fetchLane.started_at);
   const elapsed = runStart != null ? Math.max(0, nowMs - runStart) : null;
   const fetchMs = fetchEtaMs(fetchLane, nowMs);
@@ -287,9 +287,17 @@ export function DiscoveryLiveProgressBoard({
   const evalRunning = evalLane.status === "running";
   const overall = overallEtaMs(fetchMs, evalMs, fetchRunning, evalRunning);
 
+  const hydrateSnap = fetchLane.providers?.indeed;
+  const hydrateTot = hydrateSnap?.seed_total || fetchLane.seed_total || 0;
+  const hydrateIdx = hydrateSnap?.seed_index || fetchLane.seed_index || 0;
   const fetchDone = fetchLane.providers_done;
   const fetchTot = Math.max(fetchLane.providers_total, 1);
-  const fetchPct = fetchLane.status === "done" ? 100 : (fetchDone / fetchTot) * 100;
+  const fetchPct =
+    hydrateTask && hydrateTot > 0
+      ? (hydrateIdx / hydrateTot) * 100
+      : fetchLane.status === "done"
+        ? 100
+        : (fetchDone / fetchTot) * 100;
 
   const evalDone = evalLane.jobs_evaluated;
   const evalLeft = evalLane.queue_remaining;
@@ -324,8 +332,15 @@ export function DiscoveryLiveProgressBoard({
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Live progress</p>
           <p className="mt-0.5 text-sm font-semibold text-slate-100">
-            {p.phase === "done" ? "Last run" : "Fetch and Ollama run side by side"}
+            {p.phase === "done"
+              ? "Last run"
+              : hydrateTask && fetchRunning
+                ? "Filling Indeed job descriptions"
+                : "Fetch and Ollama run side by side"}
           </p>
+          {p.message?.trim() ? (
+            <p className="mt-1 max-w-xl text-[11px] leading-snug text-slate-400">{p.message.trim()}</p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-right tabular-nums">
           <div>
@@ -352,21 +367,29 @@ export function DiscoveryLiveProgressBoard({
           <div className="flex items-center justify-between gap-2">
             <div>
               <p className="text-xs font-semibold text-cyan-100">Fetch</p>
-              <p className="text-[11px] text-cyan-200/70">Listings from job boards</p>
+              <p className="text-[11px] text-cyan-200/70">
+                {hydrateTask ? "Playwright — saved Indeed listings" : "Listings from job boards"}
+              </p>
             </div>
             <StatusPill status={fetchLane.status === "idle" ? "pending" : fetchLane.status} />
           </div>
           <div className="mt-3 space-y-1.5">
             <div className="flex items-baseline justify-between text-[11px] tabular-nums text-cyan-100/90">
               <span>
-                {fetchDone}/{fetchTot} sources
+                {hydrateTask
+                  ? `${hydrateIdx}/${Math.max(hydrateTot, 1)} listings`
+                  : `${fetchDone}/${fetchTot} sources`}
               </span>
               <span>
-                {fetchLane.jobs_added} new
+                {hydrateTask ? `${fetchLane.jobs_added} filled` : `${fetchLane.jobs_added} new`}
                 {fetchMs != null && fetchRunning ? ` · ${formatDuration(fetchMs)} left` : ""}
               </span>
             </div>
-            <TrackBar pct={fetchPct} tone="cyan" indeterminate={fetchRunning && fetchDone === 0} />
+            <TrackBar
+              pct={fetchPct}
+              tone="cyan"
+              indeterminate={fetchRunning && !hydrateTask && fetchDone === 0}
+            />
           </div>
           <ul className="mt-3 space-y-1.5">
             {rows.length > 0
@@ -374,20 +397,29 @@ export function DiscoveryLiveProgressBoard({
                   const left = remainingSeeds(snap);
                   const tot = snap.seed_total || 0;
                   const idx = snap.seed_index || 0;
-                  const seedPct = snap.status === "done" || snap.status === "error" ? 100 : tot > 0 ? (Math.max(0, idx - 1) / tot) * 100 : 0;
+                  const seedPct =
+                    snap.status === "done" || snap.status === "error"
+                      ? 100
+                      : tot > 0
+                        ? ((hydrateTask ? idx : Math.max(0, idx - 1)) / tot) * 100
+                        : 0;
                   return (
                     <li key={id} className="rounded-md bg-slate-950/40 px-2.5 py-1.5">
                       <div className="flex items-center justify-between gap-2 text-[11px]">
                         <span className="font-medium text-slate-100">{PROVIDER_SHORT[id]}</span>
                         <span className="tabular-nums text-slate-400">
                           {snap.status === "running" && tot > 0
-                            ? `seed ${idx}/${tot}`
+                            ? hydrateTask
+                              ? `listing ${idx}/${tot}`
+                              : `seed ${idx}/${tot}`
                             : snap.status === "done"
-                              ? `${snap.jobs_new ?? 0} new${
-                                  snap.seed_index > 0 && snap.seed_total > 0 && snap.seed_index < snap.seed_total
-                                    ? ` · stopped ${snap.seed_index}/${snap.seed_total}`
-                                    : ""
-                                }`
+                              ? hydrateTask
+                                ? `${snap.jobs_new ?? 0} filled`
+                                : `${snap.jobs_new ?? 0} new${
+                                    snap.seed_index > 0 && snap.seed_total > 0 && snap.seed_index < snap.seed_total
+                                      ? ` · stopped ${snap.seed_index}/${snap.seed_total}`
+                                      : ""
+                                  }`
                               : snap.status === "error"
                                 ? "failed"
                                 : "queued"}
@@ -400,7 +432,9 @@ export function DiscoveryLiveProgressBoard({
                         />
                       </div>
                       {snap.status === "running" && left > 0 ? (
-                        <p className="mt-1 text-[10px] text-slate-500 tabular-nums">{left} seed phrase(s) left on this source</p>
+                        <p className="mt-1 text-[10px] text-slate-500 tabular-nums">
+                          {left} {hydrateTask ? "listing(s)" : "seed phrase(s)"} left on this source
+                        </p>
                       ) : null}
                     </li>
                   );
@@ -462,7 +496,11 @@ export function DiscoveryLiveProgressBoard({
                 ) : null}
               </p>
             ) : evalLane.status === "waiting" || (fetchRunning && !evalHasWork) ? (
-              <p className="text-slate-400">Waiting for the next listing in the eval queue.</p>
+              <p className="text-slate-400">
+                {hydrateTask && fetchRunning
+                  ? "Scoring waits until Indeed descriptions are filled."
+                  : "Waiting for the next listing in the eval queue."}
+              </p>
             ) : evalLeft > 0 ? (
               <p className="text-slate-400">{evalLeft} job(s) queued for deep analysis.</p>
             ) : evalDone > 0 ? (

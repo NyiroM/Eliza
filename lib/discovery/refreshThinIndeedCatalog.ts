@@ -18,7 +18,10 @@ function indeedHydrateCap(): number {
 export async function hydrateThinIndeedJobs(jobs: DiscoveredJob[]): Promise<DiscoveredJob[]> {
   const cap = indeedHydrateCap();
   if (cap === 0) return [];
-  const thin = jobs.filter((j) => j.provider === "indeed" && jobNeedsDescriptionEnrichment(j)).slice(0, cap);
+  const thin = jobs
+    .filter((j) => j.provider === "indeed" && jobNeedsDescriptionEnrichment(j))
+    .slice(-cap)
+    .reverse();
   if (thin.length === 0) return [];
   try {
     await hydrateIndeedJobsViaSerpVjk(thin);

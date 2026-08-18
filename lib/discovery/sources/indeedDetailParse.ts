@@ -18,15 +18,22 @@ export function isIndeedChallengeHtml(html: string): boolean {
 }
 
 function indeedDescriptionFromEmbeddedJson(html: string): string | null {
-  const m = html.match(/"jobDescription"\s*:\s*"((?:\\.|[^"\\]){40,})"/);
-  if (!m?.[1]) return null;
-  try {
-    const raw = JSON.parse(`"${m[1]}"`);
-    const plain = stripHtmlToPlainText(String(raw));
-    return plain.length > 40 ? plain.slice(0, 14_000) : null;
-  } catch {
-    return null;
+  const patterns = [
+    /"jobDescription"\s*:\s*"((?:\\.|[^"\\]){40,})"/,
+    /"jobDescriptionText"\s*:\s*"((?:\\.|[^"\\]){40,})"/,
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (!m?.[1]) continue;
+    try {
+      const raw = JSON.parse(`"${m[1]}"`);
+      const plain = stripHtmlToPlainText(String(raw));
+      if (plain.length > 40) return plain.slice(0, 14_000);
+    } catch {
+      /* next pattern */
+    }
   }
+  return null;
 }
 
 export function extractIndeedDescriptionFromHtml(html: string): string | null {

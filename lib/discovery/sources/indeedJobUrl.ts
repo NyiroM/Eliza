@@ -45,6 +45,33 @@ export function indeedSerpVjkUrl(jk: string): string {
   return `${INDEED_HU_ORIGIN}/jobs?vjk=${encodeURIComponent(jk.trim())}`;
 }
 
+/** Search URL copied into listing-only blurbs (`Indeed: https://hu.indeed.com/jobs?q=…`). */
+export function indeedSearchUrlFromListingBlurb(description: string): string | null {
+  const m = description.match(/^Indeed:\s*(https?:\/\/\S+)/im);
+  if (!m?.[1]) return null;
+  try {
+    const u = new URL(m[1].trim());
+    if (!/(^|\.)indeed\.com$/i.test(u.hostname)) return null;
+    if (!u.pathname.startsWith("/jobs")) return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** `jobs?q=…&l=…&vjk=` — same search session as the listing scrape, not a cold `/jobs?vjk=` hit. */
+export function indeedSerpVjkOnSearchUrl(searchUrl: string | null | undefined, jk: string): string {
+  const vjk = jk.trim();
+  if (!searchUrl) return indeedSerpVjkUrl(vjk);
+  try {
+    const u = new URL(searchUrl);
+    u.searchParams.set("vjk", vjk);
+    return u.toString();
+  } catch {
+    return indeedSerpVjkUrl(vjk);
+  }
+}
+
 /**
  * Prefer `jk` from resolved href; fall back to data-jk. Returns null if unusable.
  */
