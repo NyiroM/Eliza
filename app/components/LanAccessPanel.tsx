@@ -1,4 +1,4 @@
-// app/components/LanAccessPanel.tsx — dashboard banner: LAN URLs + gate / logout.
+// app/components/LanAccessPanel.tsx — dashboard banner: LAN + Tailscale URLs + gate / logout.
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,10 +6,13 @@ import { useRouter } from "next/navigation";
 import { BTN_GHOST_SM } from "../../lib/ui/dashboardButtons";
 
 type ServerInfo = {
+  accessMode?: string;
   accessModeLabel?: string;
   gateEnabled?: boolean;
   localhostUrl?: string;
   lanUrls?: string[];
+  tailscaleUrls?: string[];
+  remoteHint?: string;
   wanNote?: string;
   port?: number;
 };
@@ -42,12 +45,12 @@ export function LanAccessPanel() {
           return;
         }
         if (!infoRes.ok) {
-          setLoadError("Could not load LAN access info.");
+          setLoadError("Could not load network access info.");
           return;
         }
         setInfo((await infoRes.json()) as ServerInfo);
       } catch {
-        if (!cancelled) setLoadError("Could not load LAN access info.");
+        if (!cancelled) setLoadError("Could not load network access info.");
       }
     })();
     return () => {
@@ -79,6 +82,8 @@ export function LanAccessPanel() {
   }
 
   const lanUrls = info?.lanUrls ?? [];
+  const tailscaleUrls = info?.tailscaleUrls ?? [];
+  const stepLabel = info?.accessMode === "tailscale" ? "steps 1–2" : "step 1 · Tailscale for remote";
 
   return (
     <section
@@ -88,10 +93,10 @@ export function LanAccessPanel() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-            Network access · step 1
+            Network access · {stepLabel}
           </p>
           <p className="text-slate-200">
-            {info?.accessModeLabel ?? "Same Wi‑Fi / LAN only"}
+            {info?.accessModeLabel ?? "Same Wi‑Fi / LAN"}
             {gateEnabled ? (
               <span className="ml-2 text-emerald-400/90">· password gate on</span>
             ) : (
@@ -99,9 +104,9 @@ export function LanAccessPanel() {
             )}
           </p>
           <p className="text-xs text-slate-500">
-            Full backend and Ollama run on this host. Open ELIZA from another device on the same network
-            using a LAN URL below
-            {gateEnabled ? " (after the password screen)" : ""}.
+            Full backend and Ollama run on this host. Same Wi‑Fi: use a LAN URL. Away from home: install
+            Tailscale on this phone (same account), then open a Tailscale URL
+            {gateEnabled ? " after the password screen" : ""}.
           </p>
         </div>
         {gateEnabled ? (
@@ -136,9 +141,24 @@ export function LanAccessPanel() {
             </button>
           </li>
         ))}
+        {tailscaleUrls.length === 0 && info ? (
+          <li className="text-xs text-slate-500">
+            No Tailscale IP yet — install Tailscale on this host for remote access (no router port forward).
+          </li>
+        ) : null}
+        {tailscaleUrls.map((url) => (
+          <li key={url} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="shrink-0 text-sky-400/90">Tailscale</span>
+            <code className="rounded bg-slate-950 px-2 py-0.5 text-sky-100">{url}</code>
+            <button type="button" onClick={() => void copyUrl(url)} className={BTN_GHOST_SM}>
+              {copied === url ? "Copied" : "Copy"}
+            </button>
+          </li>
+        ))}
       </ul>
 
-      {info?.wanNote ? <p className="mt-2 text-[11px] text-slate-500">{info.wanNote}</p> : null}
+      {info?.remoteHint ? <p className="mt-2 text-[11px] text-slate-500">{info.remoteHint}</p> : null}
+      {info?.wanNote ? <p className="mt-1 text-[11px] text-slate-500">{info.wanNote}</p> : null}
     </section>
   );
 }

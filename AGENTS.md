@@ -13,7 +13,7 @@ Human-oriented overview: **[README.md](./README.md)**. Release history: **[CHANG
 - **App:** Next.js App Router (`app/`), React 19, TypeScript, Tailwind CSS v4.
 - **Tailwind:** `app/globals.css` may use `@source` so utilities defined under `lib/**/*.ts` are picked up (for example shared class strings in `lib/ui/`).
 - **Inference:** Ollama via `lib/llm/ollama.ts`; default host from **`OLLAMA_HOST`** (see `.env.example`).
-- **LAN gate (step 1):** `npm run dev` listens on **`0.0.0.0`**. Optional **`ELIZA_GATE_PASSWORD`** → login at `/login`; **`proxy.ts`** verifies the gate cookie and allows same-origin private LAN Origins. See **`lib/auth/`**, **`GET /api/server-info`**. Step 2 (WAN) not implemented.
+- **LAN + Tailscale gate (steps 1–2):** `npm run dev` listens on **`0.0.0.0`**. Optional **`ELIZA_GATE_PASSWORD`** → login at `/login`; **`proxy.ts`** verifies the gate cookie and allows same-origin private LAN + Tailscale (`100.x` / `*.ts.net`) Origins. See **`lib/auth/`**, **`GET /api/server-info`**. Remote access is via Tailscale mesh — do not port-forward the app.
 - **Discovery Hub:** sync and queue under `app/api/discovery/`; logic in `lib/discovery/` (catalog, `sync.ts`, `processEvalQueue.ts`, Playwright fetchers, **`dupeFingerprint.ts` / `dupeIndexStore.ts`**, **`suppressedStore.ts`**).
 - **Contracts:** shared types in `types/` (especially `types/discovery.ts` for hub rows and API shapes).
 - **Limits / discovery env defaults:** `config/constants.ts` (overrides via env vars listed in `.env.example` and README).
