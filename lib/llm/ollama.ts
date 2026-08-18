@@ -4,6 +4,7 @@ import { DEFAULT_OLLAMA_MODEL } from "../../config/constants";
 import { extractCompleteJSON } from "./extractCompleteJSON";
 import { isBackendLlmVerboseLog } from "../logging/backendLlmVerbose";
 import { redactSensitiveData } from "../security/redactSensitiveData";
+import { Agent } from "undici";
 
 /** Parses a positive-integer env override, clamped to [min, max]; falls back when unset/invalid. */
 function parseIntEnv(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -22,6 +23,13 @@ function isTruthyEnv(raw: string | undefined): boolean {
  * Override with `OLLAMA_TIMEOUT_MS` (e.g. lower on fast GPUs, higher on slow CPUs).
  */
 export const OLLAMA_TIMEOUT = parseIntEnv(process.env.OLLAMA_TIMEOUT_MS, 300_000, 5_000, 1_800_000);
+
+/** Undici defaults headersTimeout≈300s; slow CPU Ollama can exceed that before first byte. */
+const ollamaDispatcher = new Agent({
+  headersTimeout: OLLAMA_TIMEOUT,
+  bodyTimeout: OLLAMA_TIMEOUT,
+  connectTimeout: Math.min(60_000, OLLAMA_TIMEOUT),
+});
 
 /**
  * Safety ceiling for num_predict. Override with `OLLAMA_NUM_PREDICT` — lower it on weak
@@ -620,7 +628,9 @@ async function ollamaGenerateRaw(
       },
       body: JSON.stringify(requestBody),
       signal: controller.signal,
-    });
+      // Node/undici: keep headers/body wait aligned with AbortController ceiling.
+      dispatcher: ollamaDispatcher,
+    } as RequestInit);
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");

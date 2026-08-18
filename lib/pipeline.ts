@@ -71,6 +71,11 @@ import {
   shouldSuppressHardVetoForTactics,
 } from "./pipeline/constraintVetoTactics";
 import {
+  buildProspectingHardVetoReason,
+  hasNoProspectingConstraint,
+  isNewBusinessHuntingRole,
+} from "./pipeline/prospectingVeto";
+import {
   enforceLocationGeographyOnReview,
   inferLocationGeographyVeto,
   mergeOfflineVetos,
@@ -494,12 +499,20 @@ export function parseSemanticFitReviewPayload(
   const matched = strList(o.matched_skills);
   const missing = strList(o.missing_skills);
 
+  const scoreComponentsEarly = parseScoreComponents(o.score_components);
+
   let fitScore =
     typeof o.fit_score === "number" && Number.isFinite(o.fit_score)
       ? Math.round(o.fit_score)
       : baseline.fit_score;
   if (vetoed) fitScore = 0;
-  else fitScore = Math.max(0, Math.min(100, fitScore));
+  else {
+    fitScore = Math.max(0, Math.min(100, fitScore));
+    // Ungrounded headline scores (no score_components) → trust deterministic baseline.
+    if (!scoreComponentsEarly) {
+      fitScore = baseline.fit_score;
+    }
+  }
 
   const rawBreakdown =
     typeof o.mathematical_breakdown === "string" ? o.mathematical_breakdown.trim() : "";
@@ -511,8 +524,24 @@ export function parseSemanticFitReviewPayload(
         : rawBreakdown.length > 0
           ? rawBreakdown
           : `VETO: ${vetoReason ?? "Hard constraint violation."}\nFinal Score: 0%.`;
-  } else if (!rawBreakdown || !isCompleteMathematicalBreakdown(rawBreakdown)) {
-    breakdown = `Breakdown generation failed.\nLiteral baseline reference: ${baseline.fit_score}%.\nApplied fit score: ${fitScore}%.`;
+  } else if (
+    !scoreComponentsEarly ||
+    !rawBreakdown ||
+    !isCompleteMathematicalBreakdown(rawBreakdown)
+  ) {
+    // Always rewrite when components are missing so Final Score cannot disagree with fit_score.
+    const sourceNote = scoreComponentsEarly
+      ? "model breakdown incomplete"
+      : "model omitted score_components; using server baseline fit_score";
+    breakdown =
+      `Breakdown generation failed (${sourceNote}).\n` +
+      `1) Base Skill Match Score (required-only semantic overlap): ${fitScore}% (provisional)\n` +
+      `2) Skill Overlap: 0% (not provided by model)\n` +
+      `3) Experience Match: 0% (not provided by model)\n` +
+      `4) Constraint Adjustments (location, job type, work model): 0% (not provided by model)\n` +
+      `5) Advantage Bonuses: 0% (not provided by model)\n` +
+      `6) Arithmetic: ${fitScore} + (0) + (0) + (0) + (0) = ${fitScore} (provisional)\n` +
+      `7) Final Score: ${fitScore}%.`;
   }
 
   let narrative =
@@ -535,6 +564,21 @@ export function parseSemanticFitReviewPayload(
       vetoReason;
     oneSentence = headline.trim().slice(0, 400);
     if (offlineGeographyVeto) narrative = "";
+  }
+
+  // Strip "rejected"/"vetoed" wording when the model did not actually veto.
+  if (!vetoed) {
+    const rejectiony =
+      /\b(rejected|vetoed|hard veto|disqualified|do not apply)\b/i;
+    if (rejectiony.test(oneSentence)) {
+      oneSentence = `Fit score ${fitScore}% — see the numeric breakdown for details.`;
+    }
+    if (rejectiony.test(narrative)) {
+      narrative = narrative
+        .replace(/\brejected\b/gi, "scored")
+        .replace(/\bvetoed\b/gi, "flagged")
+        .replace(/\bhard veto\b/gi, "constraint note");
+    }
   }
   oneSentence = oneSentence.slice(0, 400);
 
@@ -572,7 +616,7 @@ export function parseSemanticFitReviewPayload(
   irrelevantExtraSkills.sort();
 
   let fitScoreReconciled = false;
-  const scoreComponents = parseScoreComponents(o.score_components);
+  const scoreComponents = scoreComponentsEarly;
   if (!vetoed && scoreComponents) {
     const llmDeclaredRaw =
       typeof o.fit_score === "number" && Number.isFinite(o.fit_score) ? Math.round(o.fit_score) : null;
@@ -895,11 +939,15 @@ export async function runPipelineDetailed(
     jobParsed.required_skills,
     combinedJobText,
   );
+  const prospectingConflict =
+    hasNoProspectingConstraint(constraints) && isNewBusinessHuntingRole(combinedJobText);
   const hardVetoReason =
     universalConstraintConflict
       ? `Vetoed: You explicitly excluded "${universalConstraintConflict}", but it is a required condition for this role.`
       : noCodeConstraint && requiredProgrammingSkill
       ? `Vetoed: This role requires ${requiredProgrammingSkill}, which you explicitly excluded.`
+      : prospectingConflict
+      ? buildProspectingHardVetoReason()
       : null;
 
   const decisionBrief: SemanticFitDecisionBrief = {

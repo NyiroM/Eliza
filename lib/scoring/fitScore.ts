@@ -1,6 +1,11 @@
 import type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
+import {
+  hasNoProspectingConstraint,
+  isNewBusinessHuntingRole,
+} from "../pipeline/prospectingVeto";
 
 export type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
+export { hasNoProspectingConstraint, isNewBusinessHuntingRole } from "../pipeline/prospectingVeto";
 
 type SeniorityLevel = "junior" | "mid" | "senior" | "lead" | "unknown";
 
@@ -108,6 +113,16 @@ export function collectConstraintSignalHints(constraints: string[], jobText: str
     );
   }
 
+  if (hasNoProspectingConstraint(constraints) && isNewBusinessHuntingRole(jobText)) {
+    hints.push(
+      "User constraints ban new-client hunting / prospecting / net-new acquisition; this posting describes a new-business or hunter-style sales role — hard veto is expected.",
+    );
+  } else if (hasNoProspectingConstraint(constraints)) {
+    hints.push(
+      "User constraints ban prospecting / hunting new clients — do not treat existing-account or technical support work as a conflict unless the role is primarily new-business acquisition.",
+    );
+  }
+
   const hasDogDislikeConstraint = constraints.some((constraint) => {
     const t = constraint.toLowerCase();
     return (
@@ -199,10 +214,41 @@ function entityMatchesProfile(
   if (skillSet.has(e)) return true;
   if (profileBlob.includes(e)) return true;
 
+  const stop = new Set([
+    "and",
+    "or",
+    "the",
+    "of",
+    "for",
+    "with",
+    "to",
+    "in",
+    "a",
+    "an",
+    "technologies",
+    "technology",
+    "systems",
+    "system",
+    "skills",
+    "skill",
+    "knowledge",
+    "experience",
+    "software",
+    "hardware",
+    "solutions",
+    "solution",
+    "tools",
+    "tool",
+    "platforms",
+    "platform",
+    "applications",
+    "application",
+  ]);
+
   const tokens = e
     .split(/[^a-z0-9+.#/]+/i)
     .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length >= 2);
+    .filter((t) => t.length >= 2 && !stop.has(t));
 
   if (tokens.length === 0) return false;
   if (tokens.length === 1) {
