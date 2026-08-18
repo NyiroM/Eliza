@@ -29,6 +29,7 @@ import {
   fetchJobsForProviderResilient,
 } from "./resilientProviderFetch";
 import { uniquePhrasesPreserveOrder } from "./searchKeywords";
+import { hydrateThinIndeedJobs, requeueHydratedIndeedJobs } from "./refreshThinIndeedCatalog";
 
 const PROVIDER_LOG_LABEL: Record<DiscoveryProviderId, string> = {
   indeed: "Indeed",
@@ -289,6 +290,7 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
                       status: "running" as const,
                       seed_index: ev.seedIndex1Based,
                       seed_total: ev.seedsTotal,
+                      ...(ev.kind === "start" ? { seed_started_at: new Date().toISOString() } : {}),
                       ...(ev.kind === "done" ? { last_seed_ms: ev.durationMs, jobs_new: ev.uniqueCount } : {}),
                     },
                   },
@@ -314,6 +316,15 @@ export async function runDiscoverySync(opts: DiscoverySyncOptions): Promise<Disc
     await dupeIndex.save().catch(() => {});
     await saveDiscoverySettings(settings);
     discoveryTerminalLog(`phase=storage jobs_appended_buffer=${newJobsBuffer.length} jobs_added=${jobsAdded}`);
+
+    if (opts.providers.includes("indeed")) {
+      const catalog = await loadDiscoveredJobsTail(DISCOVERY_SYNC_BACKLOG_MAX_JOBS);
+      const hydrated = await hydrateThinIndeedJobs(catalog);
+      discoveryTerminalLog(`phase=indeed_catalog_hydrate hydrated=${hydrated.length}`);
+      if (hydrated.length > 0) {
+        await requeueHydratedIndeedJobs(hydrated, heuristicBlob, suppressedFilterEarly);
+      }
+    }
 
     const prevQueue = await readDiscoveryProgress();
     const sess = prevQueue.sessionLiveStats ?? defaultSessionLiveStats();

@@ -6,6 +6,7 @@ import { runPipelineDetailed } from "../pipeline";
 import { addEvaluatedJobIds, loadEvaluatedJobIds } from "./evaluatedStore";
 import { clearEvalFailure, pruneEvalFailures, recordEvalFailure } from "./evalFailureStore";
 import { buildJobTextForPipeline } from "./jobText";
+import { hydrateThinIndeedJobs } from "./refreshThinIndeedCatalog";
 import { appendNewMatch } from "./matchesStore";
 import { appendNonMatch } from "./nonMatchesStore";
 import { loadDiscoverySettings } from "./settings";
@@ -160,6 +161,12 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   };
 
   const batch = await takeFromEvalQueue(opts.maxItems, evaluated, suppressedFilter);
+  if (batch.some((j) => j.provider === "indeed")) {
+    const hydrated = await hydrateThinIndeedJobs(batch);
+    if (hydrated.length > 0) {
+      discoveryTerminalLog(`phase=eval_indeed_hydrate n=${hydrated.length}`);
+    }
+  }
 
   let newHighMatches = 0;
   let processed = 0;

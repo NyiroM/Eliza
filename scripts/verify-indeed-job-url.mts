@@ -8,7 +8,7 @@ type IndeedJobUrlApi = typeof import("../lib/discovery/sources/indeedJobUrl");
 const indeedJobUrl: IndeedJobUrlApi =
   (indeedJobUrlModule as unknown as { default?: IndeedJobUrlApi }).default ?? (indeedJobUrlModule as unknown as IndeedJobUrlApi);
 
-const { canonicalIndeedViewJobUrl, resolveIndeedJobUrl } = indeedJobUrl;
+const { canonicalIndeedViewJobUrl, resolveIndeedJobUrl, indeedJkFromJobUrl, indeedSerpVjkUrl } = indeedJobUrl;
 
 const INDEED_HU_ORIGIN = "https://hu.indeed.com";
 // Pick a jk that does NOT contain every hex digit exactly once (otherwise the
@@ -74,6 +74,11 @@ function run(): void {
     const $ = cheerio.load(`<a href="/viewjob?jk=${REAL_JK}">Only href</a>`, null, false);
     const a = $("a").get(0)!;
     assert.equal(resolveIndeedJobUrl($, a), canonicalIndeedViewJobUrl(REAL_JK));
+  }
+  {
+    assert.equal(indeedJkFromJobUrl(canonicalIndeedViewJobUrl(REAL_JK)), REAL_JK);
+    assert.equal(indeedJkFromJobUrl(`https://hu.indeed.com/jobs?vjk=${REAL_JK}`), REAL_JK);
+    assert.equal(indeedSerpVjkUrl(REAL_JK), `https://hu.indeed.com/jobs?vjk=${REAL_JK}`);
   }
 }
 

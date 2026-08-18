@@ -3,6 +3,13 @@ import * as cheerio from "cheerio";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discovery";
 import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
 import { stableJobId } from "../id";
+import { extractLinkedInDescriptionFromHtml } from "./linkedinDetailParse";
+import {
+  extractLinkedInJobPostingId,
+  linkedInGuestJobPostingUrl,
+  linkedInPublicJobViewUrl,
+} from "./linkedinJobUrl";
+import { fetchJobDetailBodyPlaywright } from "./jobDetailPlaywright";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -59,26 +66,40 @@ export async function fetchLinkedInGuestJobs(
 }
 
 export async function enrichLinkedInJobDescription(jobUrl: string): Promise<string | null> {
-  const m = jobUrl.match(/\/jobs\/view\/(\d+)/);
-  const id = m?.[1];
-  if (!id) return null;
-  const detailUrl = `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${id}`;
+  const id = extractLinkedInJobPostingId(jobUrl);
+  if (!id) {
+    console.warn("[linkedinGuest] no numeric job id in url", jobUrl.slice(0, 140));
+    return null;
+  }
+  const guestUrl = linkedInGuestJobPostingUrl(id);
+
   try {
-    const res = await timedDiscoveryFetch(detailUrl, {
+    const res = await timedDiscoveryFetch(guestUrl, {
       headers: {
         "User-Agent": UA,
         Referer: "https://www.linkedin.com/jobs/search/",
         "Accept-Language": "en-US,en;q=0.9",
       },
     });
-    if (!res.ok) return null;
-    const html = await readDiscoveryResponseText(res);
-    const $ = cheerio.load(html);
-    const markup = $(".show-more-less-html__markup").text().trim();
-    return markup.length > 0 ? markup : null;
+    if (res.ok) {
+      const html = await readDiscoveryResponseText(res);
+      const text = extractLinkedInDescriptionFromHtml(html);
+      if (text) return text;
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.warn("[linkedinGuest] jobPosting enrich failed or timed out", id, msg);
+    console.warn("[linkedinGuest] jobPosting HTTP enrich failed or timed out", id, msg);
+  }
+
+  if (process.env.ELIZA_DISCOVERY_PLAYWRIGHT === "0") return null;
+
+  try {
+    const fromGuest = await fetchJobDetailBodyPlaywright(guestUrl, "linkedin");
+    if (fromGuest) return fromGuest;
+    return await fetchJobDetailBodyPlaywright(linkedInPublicJobViewUrl(id), "linkedin");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[linkedinGuest] Playwright enrich failed", id, msg);
     return null;
   }
 }

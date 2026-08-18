@@ -1,5 +1,5 @@
 // lib/discovery/jobStore.ts
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { DISCOVERY_SYNC_BACKLOG_MAX_JOBS } from "../../config/constants";
 import type { DiscoveredJob } from "../../types/discovery";
 import { getDiscoveryDir, getDiscoveryJobsPath } from "./paths";
@@ -85,4 +85,41 @@ export async function loadDiscoveredJobsAll(maxLines = DISCOVERY_SYNC_BACKLOG_MA
   } catch {
     return [];
   }
+}
+
+/** Rewrite jobs.jsonl applying field patches by job id (every matching line). */
+export async function patchDiscoveredJobsById(
+  patches: Map<string, Partial<Pick<DiscoveredJob, "description" | "company" | "title">>>,
+): Promise<number> {
+  if (patches.size === 0) return 0;
+  await ensureDiscoveryDir();
+  let raw = "";
+  try {
+    raw = await readFile(getDiscoveryJobsPath(), "utf-8");
+  } catch {
+    return 0;
+  }
+  const lines = raw.split("\n");
+  let n = 0;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) {
+      out.push(line);
+      continue;
+    }
+    try {
+      const j = JSON.parse(line) as DiscoveredJob;
+      const patch = j.id ? patches.get(j.id) : undefined;
+      if (!patch) {
+        out.push(line);
+        continue;
+      }
+      out.push(JSON.stringify({ ...j, ...patch }));
+      n += 1;
+    } catch {
+      out.push(line);
+    }
+  }
+  await writeFile(getDiscoveryJobsPath(), out.join("\n"), "utf-8");
+  return n;
 }

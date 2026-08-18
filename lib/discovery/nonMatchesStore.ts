@@ -59,6 +59,40 @@ export async function removeNonMatchesByJobId(jobId: string): Promise<{ removed:
   return { removed };
 }
 
+export async function removeNonMatchesByJobIds(ids: Iterable<string>): Promise<number> {
+  const drop = new Set(ids);
+  if (drop.size === 0) return 0;
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  let raw = "";
+  try {
+    raw = await readFile(getDiscoveryNonMatchesPath(), "utf-8");
+  } catch {
+    return 0;
+  }
+  const lines = raw.split("\n").filter((l) => l.trim());
+  const kept: string[] = [];
+  let removed = 0;
+  for (const line of lines) {
+    try {
+      const row = JSON.parse(line) as { job_id?: string };
+      if (row.job_id && drop.has(row.job_id)) {
+        removed += 1;
+        continue;
+      }
+      kept.push(line);
+    } catch {
+      kept.push(line);
+    }
+  }
+  if (removed === 0) return 0;
+  await writeFile(
+    getDiscoveryNonMatchesPath(),
+    kept.length > 0 ? `${kept.join("\n")}\n` : "",
+    "utf-8",
+  );
+  return removed;
+}
+
 /** Truncate non_matches.jsonl (“Evaluated, not a match” list). */
 export async function clearAllNonMatches(): Promise<void> {
   await mkdir(getDiscoveryDir(), { recursive: true });

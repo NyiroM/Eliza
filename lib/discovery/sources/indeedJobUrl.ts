@@ -31,6 +31,20 @@ export function canonicalIndeedViewJobUrl(jk: string): string {
   return `${INDEED_HU_ORIGIN}/viewjob?jk=${encodeURIComponent(jk.trim())}`;
 }
 
+export function indeedJkFromJobUrl(jobUrl: string): string | null {
+  try {
+    const u = new URL(jobUrl.trim(), INDEED_HU_ORIGIN);
+    const jk = u.searchParams.get("jk")?.trim() || u.searchParams.get("vjk")?.trim();
+    return jk || null;
+  } catch {
+    return null;
+  }
+}
+
+export function indeedSerpVjkUrl(jk: string): string {
+  return `${INDEED_HU_ORIGIN}/jobs?vjk=${encodeURIComponent(jk.trim())}`;
+}
+
 /**
  * Prefer `jk` from resolved href; fall back to data-jk. Returns null if unusable.
  */

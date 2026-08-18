@@ -11,6 +11,7 @@ import { getKeywordsForSync } from "../../../../lib/discovery/keywordSync";
 import { loadDiscoverySettings } from "../../../../lib/discovery/settings";
 import { loadDiscoveredJobsAll } from "../../../../lib/discovery/jobStore";
 import { resetEvaluatedJobIds } from "../../../../lib/discovery/evaluatedStore";
+import { hydrateThinIndeedJobs } from "../../../../lib/discovery/refreshThinIndeedCatalog";
 import { clearAllNewMatches } from "../../../../lib/discovery/matchesStore";
 import { clearAllNonMatches } from "../../../../lib/discovery/nonMatchesStore";
 import { loadSuppressedFilter } from "../../../../lib/discovery/suppressedStore";
@@ -119,6 +120,10 @@ export async function POST(request: NextRequest) {
       if (jobs.length === 0) {
         return { ok: false as const, blocked: "No discovered jobs found yet. Run a sync first." };
       }
+
+      await progressQueueing(`AI reevaluate: filling Indeed descriptions, then re-queueing up to ${jobs.length} job(s)…`, true);
+      const indeedHydrated = await hydrateThinIndeedJobs(jobs);
+      discoveryTerminalLog(`phase=reevaluate_indeed_hydrate hydrated=${indeedHydrated.length}`);
 
       await progressQueueing(`AI reevaluate: resetting evaluated state and re-queueing up to ${jobs.length} job(s)…`, true);
 

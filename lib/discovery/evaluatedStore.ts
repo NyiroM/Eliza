@@ -25,3 +25,17 @@ export async function resetEvaluatedJobIds(): Promise<void> {
   await mkdir(getDiscoveryDir(), { recursive: true });
   await writeFile(getDiscoveryEvaluatedIdsPath(), JSON.stringify([], null, 2), "utf-8");
 }
+
+export async function removeEvaluatedJobIds(ids: Iterable<string>): Promise<number> {
+  const drop = new Set(ids);
+  if (drop.size === 0) return 0;
+  const cur = await loadEvaluatedJobIds();
+  let n = 0;
+  for (const id of drop) {
+    if (cur.delete(id)) n += 1;
+  }
+  if (n === 0) return 0;
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  await writeFile(getDiscoveryEvaluatedIdsPath(), JSON.stringify([...cur], null, 2), "utf-8");
+  return n;
+}
