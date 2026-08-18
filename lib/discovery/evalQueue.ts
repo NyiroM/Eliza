@@ -11,6 +11,14 @@ export type QueuedEvalJob = DiscoveredJob & { priority: number };
 
 type QueueFile = { items: QueuedEvalJob[] };
 
+let queueLock: Promise<unknown> = Promise.resolve();
+
+function withQueueLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = queueLock.then(fn, fn);
+  queueLock = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 function tokenizeKeywords(keywords: string): string[] {
   return keywords
     .toLowerCase()
@@ -53,7 +61,7 @@ async function saveQueueFile(items: QueuedEvalJob[]): Promise<void> {
 }
 
 export async function clearEvalQueue(): Promise<void> {
-  await saveQueueFile([]);
+  await withQueueLock(() => saveQueueFile([]));
 }
 
 /**
@@ -83,20 +91,22 @@ export async function mergeIntoEvalQueue(
 
   if (incoming.length === 0) return 0;
 
-  const existing = await loadQueueFile();
-  const byId = new Map<string, QueuedEvalJob>();
-  for (const q of existing) {
-    byId.set(q.id, q);
-  }
-  for (const q of incoming) {
-    const prev = byId.get(q.id);
-    if (!prev || q.priority > prev.priority) {
+  return withQueueLock(async () => {
+    const existing = await loadQueueFile();
+    const byId = new Map<string, QueuedEvalJob>();
+    for (const q of existing) {
       byId.set(q.id, q);
     }
-  }
-  const merged = [...byId.values()].sort((a, b) => b.priority - a.priority);
-  await saveQueueFile(merged);
-  return incoming.length;
+    for (const q of incoming) {
+      const prev = byId.get(q.id);
+      if (!prev || q.priority > prev.priority) {
+        byId.set(q.id, q);
+      }
+    }
+    const merged = [...byId.values()].sort((a, b) => b.priority - a.priority);
+    await saveQueueFile(merged);
+    return incoming.length;
+  });
 }
 
 /**
@@ -106,12 +116,14 @@ export async function mergeIntoEvalQueue(
 export async function getEvalQueueLength(): Promise<number> {
   const evaluated = await loadEvaluatedJobIds();
   const suppressedFilter = await loadSuppressedFilter();
-  const items = await loadQueueFile();
-  return items.filter((q) => {
-    if (evaluated.has(q.id)) return false;
-    if (isSuppressedDiscoveredJob(q, suppressedFilter)) return false;
-    return true;
-  }).length;
+  return withQueueLock(async () => {
+    const items = await loadQueueFile();
+    return items.filter((q) => {
+      if (evaluated.has(q.id)) return false;
+      if (isSuppressedDiscoveredJob(q, suppressedFilter)) return false;
+      return true;
+    }).length;
+  });
 }
 
 /** Subset of {@link getEvalQueueLength} that can run immediately (not inside failure cooldown). */
@@ -120,14 +132,16 @@ export async function getEvalQueueActionableLength(): Promise<number> {
   const suppressedFilter = await loadSuppressedFilter();
   const failures = await loadEvalFailureMap();
   const now = Date.now();
-  const items = await loadQueueFile();
-  return items.filter((q) => {
-    if (evaluated.has(q.id)) return false;
-    if (isSuppressedDiscoveredJob(q, suppressedFilter)) return false;
-    const f = failures.get(q.id);
-    if (f && isFailureInCooldown(f, now)) return false;
-    return true;
-  }).length;
+  return withQueueLock(async () => {
+    const items = await loadQueueFile();
+    return items.filter((q) => {
+      if (evaluated.has(q.id)) return false;
+      if (isSuppressedDiscoveredJob(q, suppressedFilter)) return false;
+      const f = failures.get(q.id);
+      if (f && isFailureInCooldown(f, now)) return false;
+      return true;
+    }).length;
+  });
 }
 
 /** Remove queue items that are evaluated or user-suppressed (by id or canonical URL). */
@@ -135,10 +149,12 @@ export async function pruneEvalQueue(
   evaluatedIds: ReadonlySet<string>,
   suppressedFilter: SuppressedFilter,
 ): Promise<void> {
-  const items = (await loadQueueFile()).filter(
-    (q) => !evaluatedIds.has(q.id) && !isSuppressedDiscoveredJob(q, suppressedFilter),
-  );
-  await saveQueueFile(items);
+  await withQueueLock(async () => {
+    const items = (await loadQueueFile()).filter(
+      (q) => !evaluatedIds.has(q.id) && !isSuppressedDiscoveredJob(q, suppressedFilter),
+    );
+    await saveQueueFile(items);
+  });
 }
 
 /**
@@ -153,24 +169,26 @@ export async function takeFromEvalQueue(
 ): Promise<QueuedEvalJob[]> {
   const failures = await loadEvalFailureMap();
   const now = Date.now();
-  const all = await loadQueueFile();
-  const eligible: QueuedEvalJob[] = [];
-  const blocked: QueuedEvalJob[] = [];
-  for (const q of all) {
-    if (evaluatedIds.has(q.id)) continue;
-    if (isSuppressedDiscoveredJob(q, suppressedFilter)) continue;
-    const f = failures.get(q.id);
-    if (f && isFailureInCooldown(f, now)) {
-      blocked.push(q);
-      continue;
+  return withQueueLock(async () => {
+    const all = await loadQueueFile();
+    const eligible: QueuedEvalJob[] = [];
+    const blocked: QueuedEvalJob[] = [];
+    for (const q of all) {
+      if (evaluatedIds.has(q.id)) continue;
+      if (isSuppressedDiscoveredJob(q, suppressedFilter)) continue;
+      const f = failures.get(q.id);
+      if (f && isFailureInCooldown(f, now)) {
+        blocked.push(q);
+        continue;
+      }
+      eligible.push(q);
     }
-    eligible.push(q);
-  }
-  eligible.sort((a, b) => b.priority - a.priority);
-  const batch = eligible.slice(0, max);
-  const leftover = eligible.slice(max);
-  await saveQueueFile([...leftover, ...blocked].sort((a, b) => b.priority - a.priority));
-  return batch;
+    eligible.sort((a, b) => b.priority - a.priority);
+    const batch = eligible.slice(0, max);
+    const leftover = eligible.slice(max);
+    await saveQueueFile([...leftover, ...blocked].sort((a, b) => b.priority - a.priority));
+    return batch;
+  });
 }
 
 /** Re-append items to the front of the queue (e.g. after failed pipeline without marking evaluated). */
@@ -179,12 +197,14 @@ export async function returnToEvalQueue(jobs: QueuedEvalJob[]): Promise<void> {
   const suppressedFilter = await loadSuppressedFilter();
   const allowed = jobs.filter((j) => !isSuppressedDiscoveredJob(j, suppressedFilter));
   if (allowed.length === 0) return;
-  const cur = await loadQueueFile();
-  const byId = new Map<string, QueuedEvalJob>();
-  for (const q of allowed) byId.set(q.id, q);
-  for (const q of cur) {
-    if (!byId.has(q.id)) byId.set(q.id, q);
-  }
-  const merged = [...byId.values()].sort((a, b) => b.priority - a.priority);
-  await saveQueueFile(merged);
+  await withQueueLock(async () => {
+    const cur = await loadQueueFile();
+    const byId = new Map<string, QueuedEvalJob>();
+    for (const q of allowed) byId.set(q.id, q);
+    for (const q of cur) {
+      if (!byId.has(q.id)) byId.set(q.id, q);
+    }
+    const merged = [...byId.values()].sort((a, b) => b.priority - a.priority);
+    await saveQueueFile(merged);
+  });
 }

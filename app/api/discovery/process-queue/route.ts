@@ -4,6 +4,7 @@ import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import {
   clearDiscoveryProgress,
   defaultSessionLiveStats,
+  progressSyncFinished,
   readDiscoveryProgress,
   setDiscoveryProgress,
 } from "../../../../lib/discovery/progress";
@@ -79,7 +80,13 @@ export async function POST(request: NextRequest) {
     );
     if (result.queue_remaining === 0) {
       markDiscoveryAwaitingDrain(false);
-      await clearDiscoveryProgress().catch(() => {});
+      const prev = await readDiscoveryProgress();
+      const s = prev.sessionLiveStats ?? defaultSessionLiveStats();
+      await progressSyncFinished({
+        jobsAdded: s.newJobsAdded,
+        jobsEvaluated: s.jobsEvaluated + (result.jobs_evaluated ?? 0),
+        highMatches: s.newHighMatches + (result.new_high_matches ?? 0),
+      }).catch(() => {});
     } else {
       // Refresh drain deadline so `isDiscoverySessionBlockingSync` does not expire mid long client drain
       // (TTL was only extended at initial sync/reevaluate; slow Ollama batches can exceed 10 minutes).

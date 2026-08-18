@@ -73,6 +73,25 @@ export function isFailureInCooldown(row: EvalFailureRow, now: number = Date.now(
   return now - ts < DISCOVERY_FAILURE_COOLDOWN_MS;
 }
 
+/**
+ * ms until the soonest `eval_failures` cooldown ends.
+ * `0` = at least one row is already due; `null` = no failure rows.
+ */
+export async function msUntilNextFailureCooldownEnd(now: number = Date.now()): Promise<number | null> {
+  if (DISCOVERY_FAILURE_COOLDOWN_MS <= 0) return 0;
+  const items = await loadFile();
+  if (items.length === 0) return null;
+  let soonest: number | null = null;
+  for (const row of items) {
+    const ts = Date.parse(row.last_error_at);
+    if (!Number.isFinite(ts)) continue;
+    const remaining = ts + DISCOVERY_FAILURE_COOLDOWN_MS - now;
+    const clamped = remaining <= 0 ? 0 : remaining;
+    if (soonest === null || clamped < soonest) soonest = clamped;
+  }
+  return soonest;
+}
+
 /** Remove failure rows for ids the caller has marked as definitively evaluated. */
 export async function pruneEvalFailures(ids: ReadonlySet<string>): Promise<void> {
   if (ids.size === 0) return;

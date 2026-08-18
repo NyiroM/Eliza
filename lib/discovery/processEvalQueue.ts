@@ -18,7 +18,6 @@ import {
 } from "./evalQueue";
 import {
   bumpDiscoveryProgressClock,
-  clearDiscoveryProgress,
   defaultSessionLiveStats,
   type EvalQueueProgressMeta,
   progressAnalyzing,
@@ -26,7 +25,9 @@ import {
   readDiscoveryProgress,
   setDiscoveryProgress,
 } from "./progress";
+import { scheduleEvalQueueResumeIfNeeded } from "./scheduleEvalQueueResume";
 import { loadSuppressedFilter } from "./suppressedStore";
+import { buildPipelineFailureNotMatchReason } from "./evalFailureReason";
 
 // Discovery card rationale: kept long enough for "Hays 2026 …  +X% hot-skills … heat very_hot
 // … synthetic estimate (diag) Refined: …" without truncation; trimmed cleanly at the last
@@ -114,6 +115,8 @@ export type ProcessEvalQueueOpts = {
   maxItems: number;
   /** When true, use "draining" phase label (queue continuation). */
   draining?: boolean;
+  /** Skip progress finalize + in-process drain timer (caller still holds sync lock). */
+  deferCompletion?: boolean;
 };
 
 export type ProcessEvalQueueResult = {
@@ -125,14 +128,15 @@ export type ProcessEvalQueueResult = {
   actionable_remaining: number;
   /** Jobs whose pipeline run failed this round but will retry next sync. */
   failures_pending_retry: number;
-  /** Jobs whose pipeline run failed and reached max attempts (now in evaluated_ids.json). */
+  /** Jobs whose pipeline run failed and reached max attempts (non_matches.jsonl + evaluated_ids). */
   failures_permanent: number;
 };
 
 /**
  * Runs full Veto pipeline on the next `maxItems` queued jobs (highest heuristic priority first).
  * Rows that strictly pass `!constraint_veto && fit_score >= threshold` increment `new_high_matches`
- * and are appended to new_matches.jsonl. Other successful evaluations are appended to non_matches.jsonl.
+ * and are appended to new_matches.jsonl. Other successful evaluations, and jobs that hit the
+ * pipeline-failure attempt cap, are appended to non_matches.jsonl (never silent).
  */
 export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<ProcessEvalQueueResult> {
   const settings = await loadDiscoverySettings();
@@ -164,6 +168,12 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   const completedIds: string[] = [];
 
   const total = batch.length;
+  const leftoverAfterTake = await getEvalQueueLength();
+  const evalRunStartedAt = prevForWave.evalLane?.eval_run_started_at ?? new Date().toISOString();
+  let runningEvaluated = prevForWave.evalLane?.jobs_evaluated ?? sWave.jobsEvaluated;
+  let runningHigh = prevForWave.evalLane?.high_matches ?? sWave.newHighMatches;
+  let timedJobs = prevForWave.evalLane?.timed_jobs ?? 0;
+  let timedJobsMs = prevForWave.evalLane?.timed_jobs_ms ?? 0;
   const phase = opts.draining ? "draining" : "analyzing";
   discoveryTerminalLog(
     total === 0
@@ -171,14 +181,41 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
       : `phase=eval_batch_start mode=${phase} batch=${total} maxItems=${opts.maxItems}`,
   );
 
+  if (total === 0) {
+    await setDiscoveryProgress({
+      evalLane: {
+        status: "waiting",
+        jobs_evaluated: runningEvaluated,
+        queue_remaining: leftoverAfterTake,
+        high_matches: runningHigh,
+        timed_jobs: timedJobs,
+        timed_jobs_ms: timedJobsMs,
+      },
+    });
+  }
+
   for (let i = 0; i < batch.length; i += 1) {
     const job = batch[i];
     const idx = i + 1;
     const msg = `Analyzing job ${idx}/${total} (${job.provider}) — ${job.title.slice(0, 48)}${job.title.length > 48 ? "…" : ""}`;
+    const jobStartedAt = new Date().toISOString();
+    const jobStartedMs = Date.now();
+    const evalPatch = {
+      status: "running" as const,
+      jobs_evaluated: runningEvaluated,
+      queue_remaining: leftoverAfterTake + (total - i),
+      high_matches: runningHigh,
+      current_title: job.title,
+      current_provider: job.provider,
+      job_started_at: jobStartedAt,
+      eval_run_started_at: evalRunStartedAt,
+      timed_jobs: timedJobs,
+      timed_jobs_ms: timedJobsMs,
+    };
     if (opts.draining) {
-      await progressDraining(idx, total, msg, queueMeta);
+      await progressDraining(idx, total, msg, queueMeta, evalPatch);
     } else {
-      await progressAnalyzing(idx, total, msg, queueMeta);
+      await progressAnalyzing(idx, total, msg, queueMeta, evalPatch);
     }
     if (discoveryEvalQuarterIndex(idx, total)) {
       discoveryTerminalLog(`phase=eval_progress mode=${phase} job=${idx}/${total} provider=${job.provider}`);
@@ -189,14 +226,35 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
       void bumpDiscoveryProgressClock();
     }, progressHeartbeatMs);
     try {
-      const jobText = await buildJobTextForPipeline(job);
+      const prepared = await buildJobTextForPipeline(job);
+      if (prepared.stillThin) {
+        processed += 1;
+        runningEvaluated += 1;
+        completedIds.push(job.id);
+        await clearEvalFailure(job.id);
+        await appendNonMatch({
+          job_id: job.id,
+          provider: job.provider,
+          company: job.company ?? null,
+          title: job.title,
+          url: job.url,
+          fit_score: 0,
+          constraint_veto: false,
+          evaluated_at: new Date().toISOString(),
+          one_sentence_summary: "Job description too short to score after the detail-page fetch.",
+          not_match_reason:
+            "Listing stayed title-only after detail enrich, so it was not scored as a high match.",
+        });
+        continue;
+      }
       const detailed = await runPipelineDetailed({
-        job: jobText,
+        job: prepared.text,
         model,
         job_source: jobSourceForProvider(job.provider),
         ...(opts.preferred_location !== undefined ? { preferred_location: opts.preferred_location } : {}),
       });
       processed += 1;
+      runningEvaluated += 1;
       completedIds.push(job.id);
       await clearEvalFailure(job.id);
       const r = detailed.result;
@@ -208,6 +266,7 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
 
       if (strictWinner) {
         newHighMatches += 1;
+        runningHigh += 1;
         await appendNewMatch({
           job_id: job.id,
           provider: job.provider,
@@ -247,6 +306,19 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
       if (attempts >= DISCOVERY_FAILURE_MAX_ATTEMPTS) {
         completedIds.push(job.id);
         failuresPermanent += 1;
+        runningEvaluated += 1;
+        await appendNonMatch({
+          job_id: job.id,
+          provider: job.provider,
+          company: job.company ?? null,
+          title: job.title,
+          url: job.url,
+          fit_score: 0,
+          constraint_veto: false,
+          evaluated_at: new Date().toISOString(),
+          one_sentence_summary: "Pipeline evaluation failed after retries.",
+          not_match_reason: buildPipelineFailureNotMatchReason(attempts, msgErr),
+        });
       } else {
         // Push the job back so it can be retried after the cooldown window.
         await returnToEvalQueue([job]);
@@ -254,6 +326,29 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
       }
     } finally {
       clearInterval(heartbeat);
+      timedJobs += 1;
+      timedJobsMs += Math.max(0, Date.now() - jobStartedMs);
+      const qDisk = await getEvalQueueLength();
+      const stillInBatch = total - i - 1;
+      const queueLeft = qDisk + stillInBatch;
+      await setDiscoveryProgress({
+        sessionLiveStats: {
+          jobsEvaluated: runningEvaluated,
+          newHighMatches: runningHigh,
+          queueRemaining: queueLeft,
+        },
+        evalLane: {
+          jobs_evaluated: runningEvaluated,
+          high_matches: runningHigh,
+          queue_remaining: queueLeft,
+          timed_jobs: timedJobs,
+          timed_jobs_ms: timedJobsMs,
+          status: queueLeft > 0 ? "running" : "waiting",
+          ...(queueLeft > 0
+            ? {}
+            : { current_title: undefined, current_provider: undefined, job_started_at: undefined }),
+        },
+      });
     }
   }
 
@@ -270,8 +365,50 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   // Always finalize progress at the end of a batch — otherwise the last "Analyzing N/N" line
   // sticks on disk forever, which both confuses the dashboard ("looks frozen") and prevents
   // the client-side auto-resume from firing after a restart (it only triggers on phase="queueing").
+  if (opts.deferCompletion) {
+    discoveryTerminalLog(
+      `phase=eval_batch_done mode=${phase} evaluated=${processed} high_matches=${newHighMatches} queue_remaining=${queue_remaining} actionable=${actionable_remaining} retry=${failuresPendingRetry} permanent_fail=${failuresPermanent} deferred=1`,
+    );
+    return {
+      processed,
+      new_high_matches: newHighMatches,
+      jobs_evaluated: processed,
+      queue_remaining,
+      actionable_remaining,
+      failures_pending_retry: failuresPendingRetry,
+      failures_permanent: failuresPermanent,
+    };
+  }
+
   if (queue_remaining === 0) {
-    await clearDiscoveryProgress().catch(() => {});
+    const prev = await readDiscoveryProgress();
+    if (prev.fetchLane?.status === "running") {
+      await setDiscoveryProgress({
+        phase: "fetching",
+        message: prev.message?.trim() || "Fetching remaining sources…",
+        evalLane: {
+          status: "waiting",
+          jobs_evaluated: prev.evalLane?.jobs_evaluated ?? prev.sessionLiveStats?.jobsEvaluated ?? 0,
+          queue_remaining: 0,
+          high_matches: prev.evalLane?.high_matches ?? prev.sessionLiveStats?.newHighMatches ?? 0,
+          current_title: undefined,
+          current_provider: undefined,
+          job_started_at: undefined,
+        },
+      });
+    } else {
+      await setDiscoveryProgress({
+        evalLane: {
+          status: "done",
+          jobs_evaluated: prev.evalLane?.jobs_evaluated ?? prev.sessionLiveStats?.jobsEvaluated ?? 0,
+          queue_remaining: 0,
+          high_matches: prev.evalLane?.high_matches ?? prev.sessionLiveStats?.newHighMatches ?? 0,
+          current_title: undefined,
+          current_provider: undefined,
+          job_started_at: undefined,
+        },
+      });
+    }
   } else if (actionable_remaining === 0) {
     // Queue has rows but they are all in failure cooldown — drain is genuinely waiting.
     const prev = await readDiscoveryProgress();
@@ -299,6 +436,13 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
   discoveryTerminalLog(
     `phase=eval_batch_done mode=${phase} evaluated=${processed} high_matches=${newHighMatches} queue_remaining=${queue_remaining} actionable=${actionable_remaining} retry=${failuresPendingRetry} permanent_fail=${failuresPermanent}`,
   );
+
+  await scheduleEvalQueueResumeIfNeeded({
+    model,
+    preferred_location: opts.preferred_location,
+    queueRemaining: queue_remaining,
+    actionableRemaining: actionable_remaining,
+  });
 
   return {
     processed,

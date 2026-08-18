@@ -50,6 +50,39 @@ export function isSuppressedDiscoveredJob(job: DiscoveredJob, filter: Suppressed
 }
 
 /** Persist user-dismissed listings: by id and by canonical URL (covers id drift / duplicate JSONL rows). */
+/** Merge many dismissals in one read/write (e.g. Clear lists on full JSONL files). */
+export async function mergeSuppressedListings(
+  jobs: ReadonlyArray<{ id: string; provider: string; url: string }>,
+): Promise<void> {
+  if (jobs.length === 0) return;
+  const f = await readSuppressedFile();
+  const ids = new Set(
+    (f.ids ?? []).filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((s) => s.trim()),
+  );
+  const urls = new Set(
+    (f.canonical_urls ?? [])
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      .map((s) => s.trim()),
+  );
+  for (const job of jobs) {
+    const id = job.id.trim();
+    if (!id) continue;
+    ids.add(id);
+    const prov = job.provider.trim();
+    const rawUrl = job.url.trim();
+    if (prov && rawUrl) {
+      const c = canonicalizeJobUrl(prov, rawUrl).trim();
+      if (c) urls.add(c);
+    }
+  }
+  await mkdir(getDiscoveryDir(), { recursive: true });
+  const payload: SuppressedFile = {
+    ids: [...ids].sort(),
+    canonical_urls: urls.size > 0 ? [...urls].sort() : [],
+  };
+  await writeFile(getDiscoverySuppressedIdsPath(), JSON.stringify(payload, null, 2), "utf-8");
+}
+
 export async function addSuppressedListing(job: { id: string; provider: string; url: string }): Promise<void> {
   const id = job.id.trim();
   if (!id) return;

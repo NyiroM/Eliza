@@ -3,8 +3,8 @@ import { withActiveUser } from "../../../../lib/api/withActiveUser";
 import type { DiscoveryProgressState } from "../../../../types/discovery";
 import { getEvalQueueActionableLength, getEvalQueueLength } from "../../../../lib/discovery/evalQueue";
 import {
-  clearDiscoveryProgress,
   defaultSessionLiveStats,
+  progressSyncFinished,
   readDiscoveryProgress,
   setDiscoveryProgress,
 } from "../../../../lib/discovery/progress";
@@ -46,8 +46,25 @@ export async function GET(request: NextRequest) {
       getEvalQueueLength(),
       getEvalQueueActionableLength(),
     ]);
-    if (len === 0) {
-      await clearDiscoveryProgress().catch(() => {});
+    const fetchRunning = progress.fetchLane?.status === "running";
+    if (len === 0 && fetchRunning) {
+      await setDiscoveryProgress({
+        phase: "fetching",
+        message: progress.message?.trim() || "Fetching remaining sources…",
+        evalLane: {
+          status: "waiting",
+          jobs_evaluated: progress.evalLane?.jobs_evaluated ?? progress.sessionLiveStats?.jobsEvaluated ?? 0,
+          queue_remaining: 0,
+          high_matches: progress.evalLane?.high_matches ?? progress.sessionLiveStats?.newHighMatches ?? 0,
+        },
+      });
+    } else if (len === 0) {
+      const s = progress.sessionLiveStats ?? defaultSessionLiveStats();
+      await progressSyncFinished({
+        jobsAdded: s.newJobsAdded,
+        jobsEvaluated: s.jobsEvaluated,
+        highMatches: s.newHighMatches,
+      }).catch(() => {});
     } else {
       const s = progress.sessionLiveStats ?? defaultSessionLiveStats();
       await setDiscoveryProgress({
@@ -71,7 +88,12 @@ export async function GET(request: NextRequest) {
       getEvalQueueActionableLength(),
     ]);
     if (len === 0) {
-      await clearDiscoveryProgress().catch(() => {});
+      const s = progress.sessionLiveStats ?? defaultSessionLiveStats();
+      await progressSyncFinished({
+        jobsAdded: s.newJobsAdded,
+        jobsEvaluated: s.jobsEvaluated,
+        highMatches: s.newHighMatches,
+      }).catch(() => {});
       progress = await readDiscoveryProgress();
     } else if (actionable > 0) {
       const s = progress.sessionLiveStats ?? defaultSessionLiveStats();
@@ -88,7 +110,12 @@ export async function GET(request: NextRequest) {
   if (isAwaitingClientDrainMessage(progress)) {
     const len = await getEvalQueueLength();
     if (len === 0) {
-      await clearDiscoveryProgress().catch(() => {});
+      const s = progress.sessionLiveStats ?? defaultSessionLiveStats();
+      await progressSyncFinished({
+        jobsAdded: s.newJobsAdded,
+        jobsEvaluated: s.jobsEvaluated,
+        highMatches: s.newHighMatches,
+      }).catch(() => {});
       progress = await readDiscoveryProgress();
     }
   }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getKeywordsForSync, mergeApprovedPhraseIntoSearchKeywords } from "@/lib/discovery/keywordSync";
 import { SalaryForecastCard } from "@/app/components/SalaryForecastCard";
+import { DiscoveryLiveProgressBoard } from "@/app/components/DiscoveryLiveProgress";
 import {
   buildDiscoveryListsHtmlDocument,
   downloadDiscoveryListsHtml,
@@ -24,7 +25,6 @@ import type {
   DiscoveryProgressState,
   DiscoveryProviderId,
   DiscoverySalaryForecastSnapshot,
-  DiscoverySessionLiveStats,
   DiscoverySettings,
 } from "@/types/discovery";
 
@@ -63,11 +63,6 @@ const DISCOVERY_DRAIN_MAX_ROUNDS = 40;
 /** Poll interval while sync runs — balances UI freshness vs dev-server request logging. */
 const DISCOVERY_PROGRESS_POLL_MS = 1200;
 
-function discoveryProviderLabel(id: DiscoveryProviderId | undefined): string | null {
-  if (!id) return null;
-  return PROVIDERS.find((x) => x.id === id)?.label ?? id;
-}
-
 function salaryForecastHeading(s: DiscoverySalaryForecastSnapshot): string {
   const st =
     s.match_status === "above_limit"
@@ -92,170 +87,6 @@ function formatCompanyTitle(company: string | null | undefined, title: string): 
   const c = typeof company === "string" ? company.trim() : "";
   if (!c) return title;
   return `${c} - ${title}`;
-}
-
-function discoveryPhaseHeading(phase: DiscoveryProgressState["phase"]): string {
-  switch (phase) {
-    case "fetching":
-      return "Fetching listings";
-    case "queueing":
-      return "Queue & scheduling";
-    case "analyzing":
-      return "Deep analysis (sync batch)";
-    case "draining":
-      return "Deep analysis (queue drain)";
-    default:
-      return "Discovery";
-  }
-}
-
-function parseIsoMs(iso: string | undefined): number | null {
-  if (!iso) return null;
-  const n = Date.parse(iso);
-  return Number.isFinite(n) ? n : null;
-}
-
-/** Human-readable duration for HU dashboard copy. */
-function formatDurationHu(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec} s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  if (m < 60) return `${m} p ${s} s`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  return `${h} ó ${rm} p`;
-}
-
-function discoveryPipelineRoadmapHu(p: DiscoveryProgressState): { step1of4: number; hint: string } {
-  const msg = (p.message ?? "").toLowerCase();
-  const awaitingDrain =
-    p.phase === "queueing" && (msg.includes("queued for deep") || msg.includes("background"));
-  if (p.phase === "fetching") {
-    return { step1of4: 1, hint: "Lista + részletek a kiválasztott forrásokból (Playwright / HTTP)." };
-  }
-  if (p.phase === "analyzing") {
-    return { step1of4: 3, hint: "Ollama: teljes Veto pipeline állásonként (parse, illeszkedés, bér-előrejelzés)." };
-  }
-  if (p.phase === "draining") {
-    return { step1of4: 4, hint: "A várólista következő tételei — kliens oldali drain körökben." };
-  }
-  if (awaitingDrain) {
-    return { step1of4: 4, hint: "A sync lekérő része kész; a sorban álló állások mély elemzése háttérben folyik." };
-  }
-  if (p.phase === "queueing") {
-    return { step1of4: 2, hint: "Állások sorba rendezése, várólista és katalógus összhang." };
-  }
-  return { step1of4: 0, hint: "" };
-}
-
-/** Rough ETA: last finished phrase duration × remaining phrases in this provider pass. */
-function discoveryFetchEtaMs(p: DiscoveryProgressState): number | null {
-  if (p.phase !== "fetching") return null;
-  const idx = p.fetchKeywordIndex;
-  const tot = p.fetchKeywordTotal;
-  const last = p.fetchPhraseDurationMs;
-  if (idx == null || tot == null || tot <= 0 || last == null || last <= 0) return null;
-  const remainingInPass = tot - idx + 1;
-  if (remainingInPass <= 0) return null;
-  return last * remainingInPass;
-}
-
-/** Rough ETA from average completed job time in this eval batch. */
-function discoveryEvalEtaMs(p: DiscoveryProgressState, nowMs: number): number | null {
-  if (p.phase !== "analyzing" && p.phase !== "draining") return null;
-  const idx = p.analysisIndex;
-  const tot = p.analysisTotal;
-  const batchStart = parseIsoMs(p.eval_batch_started_at);
-  if (idx == null || tot == null || tot <= 0 || batchStart == null) return null;
-  if (idx < 2) return null;
-  const elapsed = nowMs - batchStart;
-  const avgPerCompleted = elapsed / (idx - 1);
-  const jobsLeftInBatch = tot - idx + 1;
-  return avgPerCompleted * jobsLeftInBatch;
-}
-
-/** Full eval-queue progress (completed vs session total), not just the current Veto batch slice. */
-function discoveryEvalQueueProgressFromLive(
-  p: DiscoveryProgressState,
-  session: DiscoverySessionLiveStats | undefined,
-): { completed: number; grand: number; pct: number } | null {
-  const grand = p.evalSessionGrandTotal;
-  if (grand == null || grand <= 0) return null;
-  const batchBase = p.evalBatchBaseJobsEvaluated ?? 0;
-  const idx = p.analysisIndex;
-  const jobsFromSession = session?.jobsEvaluated ?? 0;
-  let completed: number;
-  if (idx != null && idx >= 1) {
-    const fromWave = batchBase + (idx - 1);
-    completed = Math.max(fromWave, jobsFromSession);
-  } else {
-    completed = jobsFromSession;
-  }
-  completed = Math.min(grand, Math.max(0, completed));
-  const pct = Math.min(100, (completed / grand) * 100);
-  return { completed, grand, pct };
-}
-
-function DiscoveryPipelineTrace({ p, nowMs }: { p: DiscoveryProgressState; nowMs: number }) {
-  const runStart = parseIsoMs(p.pipeline_run_started_at);
-  const stepStart = parseIsoMs(p.step_started_at);
-  const runElapsed = runStart != null ? nowMs - runStart : null;
-  const stepElapsed = stepStart != null ? nowMs - stepStart : null;
-  const { step1of4, hint } = discoveryPipelineRoadmapHu(p);
-  const fetchEta = discoveryFetchEtaMs(p);
-  const evalEta = discoveryEvalEtaMs(p, nowMs);
-  const coarseEta = evalEta ?? fetchEta;
-  const roadmap = [
-    "Források lekérése",
-    "Sorba állítás & várólista",
-    "Mély elemzés (sync batch)",
-    "Mély elemzés (drain / háttér)",
-  ];
-  return (
-    <div className="rounded-md border border-slate-700/80 bg-slate-950/50 px-3 py-2.5 text-[11px] text-slate-200/95 space-y-2 leading-snug">
-      <p className="font-semibold text-amber-100/95 tracking-wide uppercase text-[10px]">Discovery pipeline</p>
-      <ol className="list-decimal list-inside space-y-0.5 text-slate-300/95">
-        {roadmap.map((label, i) => (
-          <li key={label} className={i + 1 === step1of4 ? "text-amber-100 font-medium" : ""}>
-            {label}
-            {i + 1 === step1of4 ? " · jelenleg itt" : ""}
-          </li>
-        ))}
-      </ol>
-      {hint ? <p className="text-slate-400/90">{hint}</p> : null}
-      {(p.phase === "analyzing" || p.phase === "draining") && (
-        <p className="text-slate-400/90 border-t border-slate-700/60 pt-2">
-          Egy sor „Analyzing job …” alatt előbb jöhet rövid leírás miatti LinkedIn / hálózati bővítés, utána több
-          Ollama-lépés — GPU nélkül is eltelhet idő. Az „Updated” sor kb. 45 mp-enként frissül, ha a szerver fut a
-          legújabb kóddal; ha hosszan mozdulatlan, indítsd újra a dev szervert (HMR közben is elakadhat egy régi
-          kérés).
-        </p>
-      )}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 border-t border-slate-700/60 pt-2 tabular-nums">
-        <p>
-          <span className="text-slate-500">Eltelt (futás):</span>{" "}
-          <span className="text-slate-100">{runElapsed != null ? formatDurationHu(runElapsed) : "—"}</span>
-          <span className="text-slate-500"> · a Discovery futás eleje óta (sync vagy reevaluate)</span>
-        </p>
-        <p>
-          <span className="text-slate-500">Eltelt (aktuális rész-lépés):</span>{" "}
-          <span className="text-slate-100">{stepElapsed != null ? formatDurationHu(stepElapsed) : "—"}</span>
-        </p>
-        <p className="sm:col-span-2">
-          <span className="text-slate-500">Becsült hátra (durva, ebből a körből):</span>{" "}
-          <span className="text-amber-100/90">
-            {coarseEta != null ? formatDurationHu(coarseEta) : "még nincs elég minta (1–2 részlépés után)"}
-          </span>
-          <span className="text-slate-500">
-            {" "}
-            · elemzésnél: átlag × hátralévő állás a batchben; fetchnél: utolsó frázis idő × hátralévő seed
-          </span>
-        </p>
-      </div>
-    </div>
-  );
 }
 
 function useDiscoveryProgressClock(active: boolean): number {
@@ -417,6 +248,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   const intervalRef = useRef<number | null>(null);
   /** Prevents overlapping auto-resume drains when progress still shows “continuing in the background…”. */
   const drainResumeInFlightRef = useRef(false);
+  const [searchKeywordsDraft, setSearchKeywordsDraft] = useState("");
+  const searchKeywordsDraftRef = useRef("");
+  const searchKeywordsDirtyRef = useRef(false);
+  const settingsSaveGenRef = useRef(0);
+
+  searchKeywordsDraftRef.current = searchKeywordsDraft;
 
   const loadSettings = useCallback(async () => {
     try {
@@ -433,7 +270,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
       } catch {
         /* ignore */
       }
-      setSettings(data);
+      if (searchKeywordsDirtyRef.current) {
+        setSettings({ ...data, search_keywords: searchKeywordsDraftRef.current });
+      } else {
+        setSettings(data);
+        setSearchKeywordsDraft(data.search_keywords ?? "");
+      }
     } catch {
       setMessage("Could not load discovery settings.");
     }
@@ -511,12 +353,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     }
   }, [loadMatches]);
 
-  const clearLoadedMatchLists = useCallback(async () => {
-    const snapM = matches;
-    const snapN = nonMatches;
-    if (snapM.length === 0 && snapN.length === 0) return;
+  const clearAllEvaluatedMatchLists = useCallback(async () => {
+    const totalM = newMatchesTotal;
+    const totalN = nonMatchesTotal;
+    if (totalM === 0 && totalN === 0) return;
     const ok1 = window.confirm(
-      `Remove every row currently shown in New matches (${snapM.length}) and Evaluated, not a match (${snapN.length})? Each row is removed the same way as the trash icon (suppressed in storage). This is not reversible from the UI.`,
+      `Remove all ${totalM.toLocaleString()} row(s) in New matches and ${totalN.toLocaleString()} in Evaluated, not a match (everything stored for this user, not only the rows shown here)? Each listing is suppressed the same way as the trash icon. This is not reversible from the UI.`,
     );
     if (!ok1) return;
     const typed = window.prompt(
@@ -531,37 +373,34 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     setMessage(null);
     setMatches([]);
     setNonMatches([]);
-    const deleteRow = async (path: string): Promise<boolean> => {
-      try {
-        const res = await elizaFetch(path, { method: "DELETE", headers: { "X-Eliza-Internal": "true" } });
-        return res.ok;
-      } catch {
-        return false;
-      }
-    };
+    setNewMatchesTotal(0);
+    setNonMatchesTotal(0);
     try {
-      const outcomes = await Promise.all([
-        ...snapM.map((row) => deleteRow(`/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}`)),
-        ...snapN.map((row) =>
-          deleteRow(`/api/discovery/matches?job_id=${encodeURIComponent(row.job_id)}&list=rejects`),
-        ),
-      ]);
-      const failed = outcomes.filter((ok) => !ok).length;
-      await loadMatches();
-      if (failed > 0) {
-        setMessage(
-          `${failed} of ${outcomes.length} remove request(s) failed; lists and totals were reloaded from the server.`,
-        );
-      } else {
-        setMessage(null);
+      const res = await elizaFetch("/api/discovery/clear-lists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: "{}",
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        new_matches_lines?: number;
+        non_matches_lines?: number;
+        suppressed_listings?: number;
+      };
+      if (res.status === 409 || !res.ok || data.ok === false) {
+        await loadMatches();
+        setMessage(data.error ?? "Clear lists failed; lists reloaded from the server.");
+        return;
       }
+      setMessage(null);
     } catch {
       await loadMatches();
       setMessage("Clear lists failed; lists reloaded from the server.");
     } finally {
       setClearListsBusy(false);
     }
-  }, [matches, nonMatches, loadMatches]);
+  }, [newMatchesTotal, nonMatchesTotal, loadMatches]);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -578,40 +417,86 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     return () => window.clearInterval(t);
   }, [loadSettings]);
 
-  const postSettings = async (partial: {
-    auto_sync_interval_minutes?: number;
-    match_notify_threshold_percent?: number;
-    search_keywords?: string;
-    keyword_suggestions?: DiscoveryKeywordSuggestion[];
-    providers?: Partial<Record<DiscoveryProviderId, Partial<DiscoverySettings["providers"][DiscoveryProviderId]>>>;
-  }) => {
-    const res = await elizaFetch("/api/discovery/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
-      body: JSON.stringify(partial),
-    });
-    const data = (await res.json()) as DiscoverySettings & { error?: string };
-    if (!res.ok) {
-      setMessage(data.error ?? "Save failed.");
-      return;
-    }
-    setSettings(data);
-    setMessage(null);
-  };
+  useEffect(() => {
+    return () => {
+      if (!searchKeywordsDirtyRef.current) return;
+      const text = searchKeywordsDraftRef.current;
+      void elizaFetch("/api/discovery/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify({ search_keywords: text }),
+      });
+    };
+  }, []);
+
+  const postSettings = useCallback(
+    async (
+      partial: {
+        auto_sync_interval_minutes?: number;
+        match_notify_threshold_percent?: number;
+        search_keywords?: string;
+        keyword_suggestions?: DiscoveryKeywordSuggestion[];
+        providers?: Partial<
+          Record<DiscoveryProviderId, Partial<DiscoverySettings["providers"][DiscoveryProviderId]>>
+        >;
+      },
+      opts?: { keywordsSnapshot?: string },
+    ) => {
+      const keywordsSnapshot = opts?.keywordsSnapshot;
+      const saveGen =
+        keywordsSnapshot !== undefined ? ++settingsSaveGenRef.current : settingsSaveGenRef.current;
+
+      const res = await elizaFetch("/api/discovery/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+        body: JSON.stringify(partial),
+      });
+      const data = (await res.json()) as DiscoverySettings & { error?: string };
+      if (!res.ok) {
+        setMessage(data.error ?? "Save failed.");
+        return;
+      }
+
+      const dirty = searchKeywordsDirtyRef.current;
+      const draftNow = searchKeywordsDraftRef.current;
+
+      if (keywordsSnapshot !== undefined) {
+        if (saveGen !== settingsSaveGenRef.current) return;
+        if (draftNow === keywordsSnapshot) {
+          searchKeywordsDirtyRef.current = false;
+          setSearchKeywordsDraft(data.search_keywords ?? "");
+          setSettings(data);
+        } else {
+          setSettings({ ...data, search_keywords: draftNow });
+        }
+      } else {
+        setSettings(dirty ? { ...data, search_keywords: draftNow } : data);
+        if (!dirty) {
+          setSearchKeywordsDraft(data.search_keywords ?? "");
+        }
+      }
+      setMessage(null);
+    },
+    [],
+  );
 
   /** Reads per-profile discovery progress — must work even when this tab never called `runSync` (Strict remount, refresh mid-sync). */
   const fetchDiscoveryProgress = useCallback(async () => {
     try {
       const r = await elizaFetch("/api/discovery/progress");
       const p = (await r.json()) as DiscoveryProgressState;
-      const idleLike = p.phase === "idle" && !(p.message && String(p.message).trim());
+      const idleLike =
+        p.phase === "idle" &&
+        !(p.message && String(p.message).trim()) &&
+        p.fetchLane?.status !== "running" &&
+        p.evalLane?.status !== "running";
       const next = idleLike ? null : p;
       setLiveProgress(next);
 
       // Refresh match lists automatically when progress indicates new evaluations.
       // This avoids requiring a full page refresh during long-running sync/drain.
-      const fp = next?.sessionLiveStats
-        ? `${next.phase}|${next.sessionLiveStats.jobsEvaluated}|${next.sessionLiveStats.newHighMatches}|${next.sessionLiveStats.queueRemaining}`
+      const fp = next
+        ? `${next.phase}|${next.sessionLiveStats?.jobsEvaluated ?? 0}|${next.evalLane?.jobs_evaluated ?? 0}|${next.evalLane?.high_matches ?? next.sessionLiveStats?.newHighMatches ?? 0}|${next.evalLane?.queue_remaining ?? next.sessionLiveStats?.queueRemaining ?? 0}`
         : "";
       if (fp && fp !== lastProgressFingerprintRef.current) {
         lastProgressFingerprintRef.current = fp;
@@ -705,7 +590,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           }
           if (drain.waitingFailureCooldown) {
             setMessage(
-              `${drain.remaining} job(s) still queued but waiting out pipeline failure cooldown — try Run sync or drain again in a few minutes.`,
+              `${drain.remaining} job(s) still queued but waiting out pipeline failure cooldown — the server retries when the window ends (dashboard tab not required).`,
             );
             return;
           }
@@ -751,7 +636,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           }
           if (drain.waitingFailureCooldown) {
             setMessage(
-              `${data.jobs_added ?? 0} job(s) added. ${drain.remaining} job(s) are in failure retry cooldown — continue draining later.`,
+              `${data.jobs_added ?? 0} job(s) added. ${drain.remaining} job(s) are in failure retry cooldown — the server continues when the window ends.`,
             );
             return;
           }
@@ -775,7 +660,9 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           parts.push(`${totalFailuresPendingRetry} failed and will retry next sync.`);
         }
         if (totalFailuresPermanent > 0) {
-          parts.push(`${totalFailuresPermanent} failed permanently — check the dev server logs.`);
+          parts.push(
+            `${totalFailuresPermanent} failed after retries — listed under non-matches with the error (not a silent drop).`,
+          );
         }
         parts.push(
           remaining > 0
@@ -866,7 +753,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         }
         if (drain.waitingFailureCooldown) {
           setMessage(
-            `${drain.remaining} job(s) queued but in failure cooldown — try drain again after the cooldown window.`,
+            `${drain.remaining} job(s) queued but in failure cooldown — the server retries when the window ends.`,
           );
           return;
         }
@@ -929,9 +816,11 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
       if (totalFailuresPendingRetry > 0) {
         parts.push(`${totalFailuresPendingRetry} failed and will retry next run.`);
       }
-      if (totalFailuresPermanent > 0) {
-        parts.push(`${totalFailuresPermanent} failed permanently — check the dev server logs.`);
-      }
+        if (totalFailuresPermanent > 0) {
+          parts.push(
+            `${totalFailuresPermanent} failed after retries — listed under non-matches with the error (not a silent drop).`,
+          );
+        }
       parts.push(remaining > 0 ? `${remaining} job(s) still queued for deep analysis.` : "Evaluation queue is empty.");
       setMessage(parts.join(" "));
     } catch {
@@ -983,7 +872,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           );
         } else if (drain.waitingFailureCooldown) {
           setMessage(
-            `${drain.remaining} állás még cooldownon (újrapróbálkozás) — később futtasd újra a drain-t vagy a syncet.`,
+            `${drain.remaining} állás még cooldownon (újrapróbálkozás) — a szerver magától folytatja, ha lejár az ablak.`,
           );
         } else if (drain.stalled) {
           setMessage(
@@ -1015,7 +904,10 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
 
   const intervalMinutes = settings?.auto_sync_interval_minutes ?? 60;
 
-  const syncPhrases = useMemo(() => (settings ? getKeywordsForSync(settings) : []), [settings]);
+  const syncPhrases = useMemo(
+    () => (settings ? getKeywordsForSync({ ...settings, search_keywords: searchKeywordsDraft }) : []),
+    [settings, searchKeywordsDraft],
+  );
   const hasSyncKeywords = syncPhrases.length > 0;
   const canSync = cvLoaded && hasSyncKeywords;
   const syncBlockedTitle = !cvLoaded
@@ -1027,14 +919,19 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   /** Server-authoritative: survives remount / tab switch while a sync POST still runs on the server. */
   const serverProgressLive = liveProgress != null;
   const clientAwaitingFirstProgressTick = busyProvider != null && !serverProgressLive;
-  const progressClockNow = useDiscoveryProgressClock(serverProgressLive);
+  const progressClockNow = useDiscoveryProgressClock(serverProgressLive || clientAwaitingFirstProgressTick);
 
   const approveSuggestion = (phrase: string) => {
+    const search_keywords = mergeApprovedPhraseIntoSearchKeywords(searchKeywordsDraftRef.current, phrase);
+    setSearchKeywordsDraft(search_keywords);
+    searchKeywordsDirtyRef.current = true;
     setSettings((prev) => {
       if (!prev) return prev;
-      const search_keywords = mergeApprovedPhraseIntoSearchKeywords(prev.search_keywords, phrase);
       const keyword_suggestions = (prev.keyword_suggestions ?? []).filter((row) => row.phrase !== phrase);
-      void postSettings({ search_keywords, keyword_suggestions });
+      void postSettings(
+        { search_keywords, keyword_suggestions },
+        { keywordsSnapshot: search_keywords },
+      );
       return { ...prev, search_keywords, keyword_suggestions };
     });
   };
@@ -1083,147 +980,9 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   return (
     <div className="space-y-6">
       {serverProgressLive && liveProgress ? (
-        <div
-          className="rounded-lg border border-violet-500/35 bg-violet-950/55 p-4 text-sm text-violet-100 space-y-3"
-          aria-live="polite"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Live progress</p>
-              <p className="mt-0.5 text-base font-semibold text-violet-50">{discoveryPhaseHeading(liveProgress.phase)}</p>
-              {discoveryProviderLabel(liveProgress.provider) ? (
-                <p className="text-xs text-violet-200/85 mt-0.5">Source: {discoveryProviderLabel(liveProgress.provider)}</p>
-              ) : null}
-            </div>
-          </div>
-
-          <DiscoveryPipelineTrace p={liveProgress} nowMs={progressClockNow} />
-
-          {liveProgress.phase === "fetching" &&
-          liveProgress.fetchKeywordIndex != null &&
-          liveProgress.fetchKeywordTotal != null ? (
-            <div className="rounded-md border border-violet-600/35 bg-violet-950/35 px-3 py-2 text-[11px] text-violet-100/95 space-y-1">
-              <p className="tabular-nums">
-                Seed phrase <strong>{liveProgress.fetchKeywordIndex}</strong> of{" "}
-                <strong>{liveProgress.fetchKeywordTotal}</strong> for this source ·{" "}
-                <strong>{liveProgress.keywordsInListTotal ?? "—"}</strong> phrase(s) in Search keywords
-              </p>
-              {liveProgress.fetchPhraseDurationMs != null ? (
-                <p className="text-violet-200/85">
-                  Last phrase completed in {(liveProgress.fetchPhraseDurationMs / 1000).toFixed(1)}s
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {liveProgress.sessionLiveStats &&
-          (liveProgress.phase === "queueing" ||
-            liveProgress.phase === "analyzing" ||
-            liveProgress.phase === "draining") ? (
-            <div className="rounded-md border border-emerald-900/50 bg-slate-900/50 px-3 py-2 text-[11px] text-emerald-100/95 tabular-nums space-y-0.5">
-              <p className="font-medium text-emerald-50/95">This sync (cumulative)</p>
-              <p>
-                {liveProgress.sessionLiveStats.newJobsAdded} new job(s) to catalog ·{" "}
-                {liveProgress.sessionLiveStats.jobsEvaluated} evaluated ·{" "}
-                {liveProgress.sessionLiveStats.newHighMatches} strong match(es) · queue{" "}
-                {liveProgress.sessionLiveStats.queueRemaining}
-              </p>
-            </div>
-          ) : null}
-
-          {liveProgress.phase === "analyzing" || liveProgress.phase === "draining" ? (
-            (() => {
-              const qp = discoveryEvalQueueProgressFromLive(liveProgress, liveProgress.sessionLiveStats);
-              const idx = liveProgress.analysisIndex;
-              const tot = liveProgress.analysisTotal;
-              if (qp) {
-                const { completed, grand, pct } = qp;
-                return (
-                  <div className="space-y-1">
-                    <div className="flex items-baseline justify-between gap-2 text-[11px] text-violet-100/90 tabular-nums">
-                      <span>
-                        <span className="font-semibold text-violet-50">{completed}</span>
-                        <span className="text-violet-300/80"> / {grand}</span>
-                        <span className="text-violet-400/80"> · evaluated vs total queue workload this run</span>
-                      </span>
-                      <span className="shrink-0 font-semibold text-violet-50">{Math.round(pct)}%</span>
-                    </div>
-                    <div
-                      className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800/90 ring-1 ring-violet-700/45"
-                      role="progressbar"
-                      aria-valuenow={completed}
-                      aria-valuemin={0}
-                      aria-valuemax={grand}
-                      aria-label={`Eval queue progress ${completed} of ${grand}`}
-                    >
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-violet-400 transition-[width] duration-300 ease-out"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <p className="text-[11px] text-violet-200/75">
-                      Match lists below refresh after each drain round when jobs finish.
-                    </p>
-                  </div>
-                );
-              }
-              if (idx == null || tot == null || tot <= 0) {
-                return (
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800/80" aria-hidden>
-                    <div className="h-full w-full animate-pulse rounded-full bg-violet-500/35" />
-                  </div>
-                );
-              }
-              const pctLegacy = Math.min(100, (idx / tot) * 100);
-              return (
-                <div className="space-y-1">
-                  <div className="flex items-baseline justify-between gap-2 text-[11px] text-violet-100/90 tabular-nums">
-                    <span>
-                      Job <span className="font-semibold text-violet-50">{idx}</span> of {tot} (batch)
-                    </span>
-                    <span className="shrink-0 font-semibold text-violet-50">{Math.round(pctLegacy)}%</span>
-                  </div>
-                  <div
-                    className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800/90 ring-1 ring-violet-700/45"
-                    role="progressbar"
-                    aria-valuenow={Math.round(pctLegacy)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label="Pipeline progress for this batch"
-                  >
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-violet-400 transition-[width] duration-300 ease-out"
-                      style={{ width: `${pctLegacy}%` }}
-                    />
-                  </div>
-                  <p className="text-[11px] text-violet-200/75">
-                    Match lists below refresh after each drain round when jobs finish.
-                  </p>
-                </div>
-              );
-            })()
-          ) : (
-            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800/80" aria-hidden>
-              <div className="h-full w-full animate-pulse rounded-full bg-violet-500/30" />
-            </div>
-          )}
-
-          <p className="text-sm text-violet-50/95 leading-snug border-t border-violet-600/40 pt-2">{liveProgress.message}</p>
-          <p className="text-[10px] text-violet-400/70 tabular-nums">
-            Updated {formatTime(liveProgress.updatedAt)}
-          </p>
-        </div>
+        <DiscoveryLiveProgressBoard p={liveProgress} nowMs={progressClockNow} />
       ) : clientAwaitingFirstProgressTick ? (
-        <div
-          className="rounded-lg border border-slate-700 bg-slate-900/80 p-4 text-sm text-slate-400 space-y-2"
-          aria-live="polite"
-        >
-          <p className="font-medium text-slate-300">Starting discovery…</p>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800" aria-hidden>
-            <div className="h-full w-full animate-pulse rounded-full bg-slate-600/40" />
-          </div>
-          <p className="text-xs text-slate-500">Waiting for the first progress update from the server.</p>
-        </div>
+        <DiscoveryLiveProgressBoard p={null} nowMs={progressClockNow} awaitingFirstTick />
       ) : null}
 
       <section className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
@@ -1371,9 +1130,19 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
           <span className="text-xs text-slate-500">Search keywords ({syncPhrases.length})</span>
           <textarea
             rows={3}
-            value={settings.search_keywords}
-            onChange={(e) => setSettings((s) => (s ? { ...s, search_keywords: e.target.value } : s))}
-            onBlur={() => void postSettings({ search_keywords: settings.search_keywords })}
+            value={searchKeywordsDraft}
+            onChange={(e) => {
+              const v = e.target.value;
+              searchKeywordsDirtyRef.current = true;
+              setSearchKeywordsDraft(v);
+              setSettings((s) => (s ? { ...s, search_keywords: v } : s));
+            }}
+            onBlur={() =>
+              void postSettings(
+                { search_keywords: searchKeywordsDraftRef.current },
+                { keywordsSnapshot: searchKeywordsDraftRef.current },
+              )
+            }
             className="w-full resize-y min-h-[4.5rem] rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
           />
         </label>
@@ -1407,7 +1176,12 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                     setMessage(data.error ?? "Suggestion request failed.");
                     return;
                   }
-                  setSettings(data);
+                  if (searchKeywordsDirtyRef.current) {
+                    setSettings({ ...data, search_keywords: searchKeywordsDraftRef.current });
+                  } else {
+                    setSettings(data);
+                    setSearchKeywordsDraft(data.search_keywords ?? "");
+                  }
                   setMessage("New suggestions added — review and approve before syncing.");
                 } catch {
                   setMessage("Could not reach suggest-keywords API.");
@@ -1596,10 +1370,10 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
         <button
           type="button"
           disabled={
-            clearListsBusy || (matches.length === 0 && nonMatches.length === 0) || busyProvider !== null
+            clearListsBusy || (newMatchesTotal === 0 && nonMatchesTotal === 0) || busyProvider !== null
           }
-          title="Two-step confirmation, then removes each loaded row via the same API as the trash icon (suppresses listings). Only clears rows currently shown in this panel (same tail as export)."
-          onClick={() => void clearLoadedMatchLists()}
+          title="Two-step confirmation, then suppresses and removes every row in new_matches.jsonl and non_matches.jsonl for this user (same as trash on each row), not only the dashboard tail."
+          onClick={() => void clearAllEvaluatedMatchLists()}
           className={BTN_GHOST_ROSE_SM}
         >
           {clearListsBusy ? "Clearing…" : "Clear lists"}

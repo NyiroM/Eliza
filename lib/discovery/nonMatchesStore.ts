@@ -84,8 +84,8 @@ function sortNonMatchRowsByFitScoreDesc(rows: DiscoveryNonMatchRow[]): void {
   });
 }
 
-/** Up to `maxLines` rows, strongest `fit_score` first (full file read for correct order). */
-export async function loadNonMatchesTail(maxLines = 200): Promise<DiscoveryNonMatchRow[]> {
+/** Every row in non_matches.jsonl (unsorted). */
+export async function loadAllNonMatches(): Promise<DiscoveryNonMatchRow[]> {
   try {
     const raw = await readFile(getDiscoveryNonMatchesPath(), "utf-8");
     const lines = raw.split("\n").filter((l) => l.trim());
@@ -97,9 +97,15 @@ export async function loadNonMatchesTail(maxLines = 200): Promise<DiscoveryNonMa
         /* skip */
       }
     }
-    sortNonMatchRowsByFitScoreDesc(out);
-    return out.slice(0, maxLines);
+    return out;
   } catch {
     return [];
   }
+}
+
+/** Up to `maxLines` rows, strongest `fit_score` first (full file read for correct order). */
+export async function loadNonMatchesTail(maxLines = 200): Promise<DiscoveryNonMatchRow[]> {
+  const out = await loadAllNonMatches();
+  sortNonMatchRowsByFitScoreDesc(out);
+  return out.slice(0, maxLines);
 }

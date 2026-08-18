@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Discovery live progress** — the hub shows **Fetch** and **Ollama** as two lanes (sources/seeds vs jobs scored), with remaining work and a finish-time estimate. Eval starts as soon as the first provider returns (`ELIZA_DISCOVERY_EVAL_DURING_FETCH=0` waits). The board stays visible while fetch continues and after the run finishes (**Last run**).
+- **Discovery silent eval drops** — after max pipeline retries a job is written to **`non_matches.jsonl`** with the last error (still marked evaluated so it does not loop). Overnight / closed-tab drains resume in-process after failure cooldown (`lib/discovery/scheduleEvalQueueResume.ts`; disable with **`ELIZA_DISCOVERY_SERVER_DRAIN=0`**). A provider fetch that returns **0 listings with no HTTP error** now sets **`last_error`** so empty scrape/block is visible on the hub.
 - **Default Ollama model** — `DEFAULT_OLLAMA_MODEL` changed from the invalid tag `gemma4:e4b` to the real, lightweight, schema-tuned **`gemma3n:e4b`** so the fallback model passes the install check instead of always erroring.
 
 ## [0.5.0] — 2026-05-15

@@ -105,7 +105,7 @@ export type DiscoverySyncResult = {
   cross_provider_duplicates_skipped?: Partial<Record<DiscoveryProviderId, number>>;
   /** Jobs that failed the pipeline this run but will retry next sync. */
   failures_pending_retry?: number;
-  /** Jobs that failed the pipeline and have hit the max retry budget. */
+  /** Jobs that failed the pipeline and have hit the max retry budget (non-match row + evaluated id). */
   failures_permanent?: number;
 };
 
@@ -117,8 +117,43 @@ export type DiscoverySessionLiveStats = {
   queueRemaining: number;
 };
 
+export type DiscoveryFetchProviderSnap = {
+  status: "pending" | "running" | "done" | "error";
+  seed_index: number;
+  seed_total: number;
+  jobs_new?: number;
+  last_seed_ms?: number;
+};
+
+export type DiscoveryFetchLane = {
+  status: "idle" | "running" | "done";
+  providers_total: number;
+  providers_done: number;
+  jobs_added: number;
+  started_at?: string;
+  current_provider?: DiscoveryProviderId;
+  seed_index?: number;
+  seed_total?: number;
+  phrase?: string;
+  last_seed_ms?: number;
+  providers?: Partial<Record<DiscoveryProviderId, DiscoveryFetchProviderSnap>>;
+};
+
+export type DiscoveryEvalLane = {
+  status: "idle" | "waiting" | "running" | "done";
+  jobs_evaluated: number;
+  queue_remaining: number;
+  high_matches: number;
+  current_title?: string;
+  current_provider?: DiscoveryProviderId;
+  job_started_at?: string;
+  eval_run_started_at?: string;
+  timed_jobs?: number;
+  timed_jobs_ms?: number;
+};
+
 export type DiscoveryProgressState = {
-  phase: "idle" | "fetching" | "queueing" | "analyzing" | "draining";
+  phase: "idle" | "fetching" | "queueing" | "analyzing" | "draining" | "done";
   provider?: DiscoveryProviderId;
   analysisIndex?: number;
   analysisTotal?: number;
@@ -149,6 +184,10 @@ export type DiscoveryProgressState = {
   evalSessionGrandTotal?: number;
   /** `sessionLiveStats.jobsEvaluated` snapshot at the start of the current eval batch (for progress math mid-batch). */
   evalBatchBaseJobsEvaluated?: number;
+  /** Listing fetch track — kept while Ollama eval runs in parallel. */
+  fetchLane?: DiscoveryFetchLane;
+  /** Ollama pipeline track — kept while providers are still fetching. */
+  evalLane?: DiscoveryEvalLane;
 };
 
 export type DiscoveryProcessQueueResult = {

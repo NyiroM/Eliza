@@ -84,8 +84,8 @@ function sortMatchRowsByFitScoreDesc(rows: DiscoveryMatchRow[]): void {
   });
 }
 
-/** Up to `maxLines` rows, strongest `fit_score` first (full file read for correct order). */
-export async function loadNewMatchesTail(maxLines = 200): Promise<DiscoveryMatchRow[]> {
+/** Every row in new_matches.jsonl (unsorted). */
+export async function loadAllNewMatches(): Promise<DiscoveryMatchRow[]> {
   try {
     const raw = await readFile(getDiscoveryNewMatchesPath(), "utf-8");
     const lines = raw.split("\n").filter((l) => l.trim());
@@ -97,9 +97,15 @@ export async function loadNewMatchesTail(maxLines = 200): Promise<DiscoveryMatch
         /* skip */
       }
     }
-    sortMatchRowsByFitScoreDesc(out);
-    return out.slice(0, maxLines);
+    return out;
   } catch {
     return [];
   }
+}
+
+/** Up to `maxLines` rows, strongest `fit_score` first (full file read for correct order). */
+export async function loadNewMatchesTail(maxLines = 200): Promise<DiscoveryMatchRow[]> {
+  const out = await loadAllNewMatches();
+  sortMatchRowsByFitScoreDesc(out);
+  return out.slice(0, maxLines);
 }

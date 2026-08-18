@@ -115,6 +115,8 @@ export const ENGLISH_DETECTION_PHRASE_BONUS_WEIGHT = 2;
  * First pipeline batch size after each discovery fetch (remaining jobs stay in eval queue).
  * Each job runs the full Ollama veto pipeline — this dominates wall time after fetch.
  * Set `ELIZA_DISCOVERY_SYNC_EVAL_BATCH=0` to skip in-sync analysis (fetch only; drain via process-queue).
+ * While providers are still fetching, new listings are evaluated one-at-a-time unless
+ * `ELIZA_DISCOVERY_EVAL_DURING_FETCH=0`.
  */
 const _syncEval = parseInt(process.env.ELIZA_DISCOVERY_SYNC_EVAL_BATCH ?? "", 10);
 export const DISCOVERY_SYNC_EVAL_BATCH = Number.isFinite(_syncEval)
@@ -131,8 +133,9 @@ export const DISCOVERY_QUEUE_DRAIN_BATCH = Number.isFinite(_drainBatch)
 
 /**
  * Discovery pipeline failure handling: how many attempts before a job is treated as
- * permanently evaluated, and the cooldown between retries within the same drain.
- * Override with `ELIZA_DISCOVERY_FAILURE_MAX_ATTEMPTS` and `ELIZA_DISCOVERY_FAILURE_COOLDOWN_MS`.
+ * evaluated (written to non-matches with the error), and the cooldown between retries
+ * within the same drain. Override with `ELIZA_DISCOVERY_FAILURE_MAX_ATTEMPTS` and
+ * `ELIZA_DISCOVERY_FAILURE_COOLDOWN_MS`.
  */
 const _failMax = parseInt(process.env.ELIZA_DISCOVERY_FAILURE_MAX_ATTEMPTS ?? "", 10);
 export const DISCOVERY_FAILURE_MAX_ATTEMPTS = Number.isFinite(_failMax)
@@ -152,7 +155,7 @@ export const DISCOVERY_FAILURE_COOLDOWN_MS = Number.isFinite(_failCooldown)
 export const DISCOVERY_SYNC_BACKLOG_MAX_JOBS = 5000;
 
 /**
- * HTTP timeout for discovery source fetches (LinkedIn guest, Indeed RSS, Profession list, jobPosting enrich).
+ * HTTP timeout for discovery source fetches (LinkedIn guest, Indeed/Profession detail enrich, Profession list).
  * Override with `ELIZA_DISCOVERY_HTTP_FETCH_TIMEOUT_MS`, or legacy `ELIZA_LINKEDIN_GUEST_FETCH_TIMEOUT_MS`.
  */
 const _discHttpMs = parseInt(
