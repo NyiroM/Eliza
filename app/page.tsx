@@ -13,6 +13,7 @@ import {
   BTN_PRIMARY_COMPACT,
   BTN_PRIMARY_LG,
 } from "@/lib/ui/dashboardButtons";
+import { mergeApprovedPhraseIntoSearchKeywords } from "@/lib/discovery/keywordSync";
 import { elizaFetch, persistActiveUserId, getPersistedActiveUserId } from "@/lib/elizaFetch";
 import type { SemanticHighlight } from "@/types/pipeline";
 
@@ -189,6 +190,8 @@ export default function DashboardPage() {
   const [result, setResult] = useState<PipelineResult | null>(null);
   const [loadingUpload, setLoadingUpload] = useState(false);
   const [skillsDraft, setSkillsDraft] = useState("");
+  const skillsDirtyRef = useRef(false);
+  const skillsDraftRef = useRef("");
   const [skillsSaveBusy, setSkillsSaveBusy] = useState(false);
   const [skillSuggestBusy, setSkillSuggestBusy] = useState(false);
   const [skillPhraseReviewBusy, setSkillPhraseReviewBusy] = useState(false);
@@ -295,7 +298,9 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const checkCvStatus = useCallback(async () => {
+  skillsDraftRef.current = skillsDraft;
+
+  const checkCvStatus = useCallback(async (opts?: { force?: boolean }) => {
     setMessage("");
     try {
       const response = await elizaFetch("/api/upload-cv");
@@ -311,10 +316,13 @@ export default function DashboardPage() {
         skills,
         skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : [],
       });
-      if (data.loaded) {
-        setSkillsDraft(skills.join(", "));
-      } else {
-        setSkillsDraft("");
+      if (opts?.force || !skillsDirtyRef.current) {
+        if (data.loaded) {
+          setSkillsDraft(skills.join(", "));
+        } else {
+          setSkillsDraft("");
+        }
+        skillsDirtyRef.current = false;
       }
     } catch {
       setMessage("Unable to check CV status.");
@@ -349,6 +357,7 @@ export default function DashboardPage() {
         skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : prev.skill_suggestions,
       }));
       setSkillsDraft(skills.join(", "));
+      skillsDirtyRef.current = false;
       setMessage("CV skills saved.");
     } catch {
       setMessage("Could not save skills.");
@@ -400,6 +409,9 @@ export default function DashboardPage() {
 
   async function postSkillSuggestionAction(body: Record<string, unknown>, okMsg: string) {
     if (!status.loaded || skillPhraseReviewBusy) return;
+    const pendingSkillPhrases = (status.skill_suggestions ?? []).filter(
+      (s) => s.status === "suggested" || !s.status,
+    );
     setSkillPhraseReviewBusy(true);
     setDomainSettingsMessage(null);
     try {
@@ -426,7 +438,22 @@ export default function DashboardPage() {
         skills_count: typeof data.skills_count === "number" ? data.skills_count : skills.length,
         skill_suggestions: Array.isArray(data.skill_suggestions) ? data.skill_suggestions : [],
       }));
-      setSkillsDraft(skills.join(", "));
+      if (skillsDirtyRef.current) {
+        const action = body.action;
+        if (action === "approve" && typeof body.phrase === "string") {
+          setSkillsDraft((d) => mergeApprovedPhraseIntoSearchKeywords(d, body.phrase as string));
+        } else if (action === "approve_all_skill_phrases") {
+          setSkillsDraft((d) => {
+            let next = d;
+            for (const row of pendingSkillPhrases) {
+              next = mergeApprovedPhraseIntoSearchKeywords(next, row.phrase);
+            }
+            return next;
+          });
+        }
+      } else {
+        setSkillsDraft(skills.join(", "));
+      }
       setMessage(okMsg);
     } catch {
       setMessage("Could not reach skill-suggestions API.");
@@ -533,7 +560,8 @@ export default function DashboardPage() {
         );
       }
 
-      await checkCvStatus();
+      skillsDirtyRef.current = false;
+      await checkCvStatus({ force: true });
       await loadDomainSettings();
       window.requestAnimationFrame(() => {
         cvSynonymReviewRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -606,8 +634,9 @@ export default function DashboardPage() {
   }, []);
 
   const reloadForActiveProfile = useCallback(async () => {
+    skillsDirtyRef.current = false;
     await loadUserPrefsAndOllamaModels();
-    await checkCvStatus();
+    await checkCvStatus({ force: true });
     await loadConstraints();
     await loadDomainSettings();
   }, [loadUserPrefsAndOllamaModels, checkCvStatus, loadConstraints, loadDomainSettings]);
@@ -1182,7 +1211,8 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => {
-                void checkCvStatus();
+                skillsDirtyRef.current = false;
+                void checkCvStatus({ force: true });
               }}
               className={BTN_GHOST}
             >
@@ -1228,7 +1258,10 @@ export default function DashboardPage() {
                     id="cv-skills-draft"
                     rows={4}
                     value={skillsDraft}
-                    onChange={(e) => setSkillsDraft(e.target.value)}
+                    onChange={(e) => {
+                      skillsDirtyRef.current = true;
+                      setSkillsDraft(e.target.value);
+                    }}
                     placeholder="e.g. react, node.js, typescript, postgres"
                     className="w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 font-mono text-xs text-slate-100 placeholder:text-slate-600"
                   />
@@ -1531,15 +1564,15 @@ export default function DashboardPage() {
                   Target location
                 </label>
                 <p className="text-xs text-slate-500">
-                  Optional positive signal (e.g. &quot;Budapest&quot;, &quot;EU remote&quot;). Leave empty to stay
-                  location-agnostic unless a saved constraint applies.
+                  Comma-separated cities or counties (e.g. &quot;Miskolc, Kazincbarcika, Borsod-Abaúj-Zemplén&quot;).
+                  Leave empty to stay location-agnostic unless a saved constraint applies.
                 </p>
                 <input
                   id="target-location"
                   type="text"
                   value={targetLocation}
                   onChange={(event) => setTargetLocation(event.target.value)}
-                  placeholder="e.g. Berlin, Germany or Remote — EU"
+                  placeholder="e.g. Miskolc, Kazincbarcika, Borsod-Abaúj-Zemplén"
                   className="w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-sm"
                 />
                 <button

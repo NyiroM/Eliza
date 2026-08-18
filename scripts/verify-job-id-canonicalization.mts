@@ -1,11 +1,18 @@
 // scripts/verify-job-id-canonicalization.mts — assert URL drift collapses to one stableJobId.
 import assert from "node:assert/strict";
 import * as idModule from "../lib/discovery/id";
+import * as professionUrlModule from "../lib/discovery/professionHuUrlValidation";
 
 type IdApi = typeof import("../lib/discovery/id");
 const idApi: IdApi =
   (idModule as unknown as { default?: IdApi }).default ?? (idModule as unknown as IdApi);
 const { canonicalizeJobUrl, stableJobId } = idApi;
+
+type ProfessionUrlApi = typeof import("../lib/discovery/professionHuUrlValidation");
+const professionUrl: ProfessionUrlApi =
+  (professionUrlModule as unknown as { default?: ProfessionUrlApi }).default ??
+  (professionUrlModule as unknown as ProfessionUrlApi);
+const { isProfessionJobListingHref } = professionUrl;
 
 type Equiv = { provider: string; label: string; urls: string[] };
 
@@ -109,6 +116,14 @@ for (const pair of NON_EQUIVALENTS) {
 assert.equal(canonicalizeJobUrl("indeed", ""), "");
 assert.equal(canonicalizeJobUrl("linkedin", "   "), "");
 logResult("Empty/whitespace input returns empty string", true);
+
+assert.equal(
+  isProfessionJobListingHref("/allas/gyartasindito-mernok-joyson-miskolc-2901499"),
+  true,
+);
+assert.equal(isProfessionJobListingHref("/allas/123456-software-engineer"), true);
+assert.equal(isProfessionJobListingHref("/allasok/1?adv_pattern=x"), false);
+logResult("Profession listing href vs index URL", true);
 
 console.log(`\nTotal: ${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

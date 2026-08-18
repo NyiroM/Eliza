@@ -2,7 +2,7 @@
 import * as cheerio from "cheerio";
 import type { DiscoveredJob, DiscoveryProviderId } from "../../../types/discovery";
 import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
-import { professionHuLocationSlugFromPreference } from "../professionHuUrlValidation";
+import { professionHuLocationSlugFromPreference, isProfessionJobListingHref } from "../professionHuUrlValidation";
 import { stableJobId } from "../id";
 
 const UA =
@@ -40,12 +40,13 @@ export async function fetchProfessionHuJobs(
   $("a[href*='/allas/']").each((_, a) => {
     if (out.length >= maxItems) return false;
     const href = $(a).attr("href")?.trim();
-    if (!href || href.includes("/allasok") || !/\/allas\/\d+/i.test(href)) return;
+    if (!href || !isProfessionJobListingHref(href)) return;
     const abs = href.startsWith("http") ? href : `https://www.profession.hu${href.startsWith("/") ? "" : "/"}${href}`;
     const pathOnly = abs.split("?")[0];
     if (seen.has(pathOnly)) return;
     seen.add(pathOnly);
-    const title = $(a).text().trim() || $(a).attr("title")?.trim() || "Job";
+    const $a = $(a);
+    const title = ($a.attr("data-item-name")?.trim() || $a.text().trim() || $a.attr("title")?.trim() || "Job");
     if (title.length < 2) return;
     out.push({
       id: stableJobId(provider, pathOnly),

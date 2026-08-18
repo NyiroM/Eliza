@@ -1,4 +1,5 @@
 import type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
+import { userConstraintsRejectCodingWork } from "../pipeline/noCodeRoleVeto";
 
 export type { FitScoreResult, JobScoringEntities } from "../../types/scoring";
 
@@ -101,6 +102,12 @@ function isTrulySolitaryRole(jobText: string): boolean {
  */
 export function collectConstraintSignalHints(constraints: string[], jobText: string): string[] {
   const hints: string[] = [];
+
+  if (userConstraintsRejectCodingWork(constraints)) {
+    hints.push(
+      "NO_CODE_HARD_VETO: user cannot write or read code. Hard-veto any role whose core work is writing, reading, reviewing, debugging, or shipping software — any language, including example/PoC/firmware/embedded. That is a veto, not a missing-skill gap. Job title alone (Engineer, Sales, Application, Support) is not a veto when duties are non-coding; the duties decide.",
+    );
+  }
 
   if (hasNoPmConstraint(constraints) && isPmRoleJob(jobText)) {
     hints.push(

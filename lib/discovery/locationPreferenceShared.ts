@@ -14,10 +14,57 @@ export const JOB_BOARD_BROAD_LOCATION_SLUGS = new Set([
   "europe",
 ]);
 
+/** Country names that must not be treated as a job's on-site city (office lists, HQ countries). */
+export const GEOGRAPHY_COUNTRY_SLUGS = new Set([
+  ...JOB_BOARD_BROAD_LOCATION_SLUGS,
+  "latvia",
+  "latvija",
+  "serbia",
+  "srbija",
+  "croatia",
+  "slovenia",
+  "slovakia",
+  "czechia",
+  "czech-republic",
+  "austria",
+  "germany",
+  "poland",
+  "romania",
+  "bulgaria",
+  "greece",
+  "italy",
+  "spain",
+  "portugal",
+  "france",
+  "netherlands",
+  "belgium",
+  "switzerland",
+  "sweden",
+  "norway",
+  "finland",
+  "denmark",
+  "estonia",
+  "lithuania",
+  "ukraine",
+  "moldova",
+  "ireland",
+  "united-kingdom",
+  "uk",
+  "usa",
+  "united-states",
+]);
+
+export function parsePreferredLocationSegments(preferredLocation: string | null | undefined): string[] {
+  if (preferredLocation == null) return [];
+  return preferredLocation
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function firstCommaLocationSegment(preferredLocation: string | null | undefined): string | null {
-  if (preferredLocation == null) return null;
-  const first = preferredLocation.split(",")[0]?.trim() ?? "";
-  return first || null;
+  const first = parsePreferredLocationSegments(preferredLocation)[0];
+  return first ?? null;
 }
 
 export function segmentToLocationSlug(segment: string): string {

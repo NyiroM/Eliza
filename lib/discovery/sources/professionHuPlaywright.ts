@@ -19,6 +19,7 @@ import { stableJobId } from "../id";
 import {
   professionHuLocationSlugFromPreference,
   professionSearchNavigationFailureReason,
+  isProfessionJobListingHref,
 } from "../professionHuUrlValidation";
 import { nuclearProfessionHuModalClearance } from "./professionHuNuclear";
 
@@ -35,12 +36,12 @@ function professionListingFallbackEntry(preferredLocation: string | null | undef
 
 /**
  * Hard cap for the entire Profession.hu Playwright fetch (navigation, settle, listing, detail sampling).
- * Several URL variants (each with settle) + typed-search fallback can exceed 200s; default leaves room for that path.
+ * Listing-only path (default, details at eval) usually finishes well under this; HTTP fallback runs if it trips.
  */
-const FETCH_OVERALL_TIMEOUT_MS = Number(process.env.ELIZA_PROFESSION_FETCH_TIMEOUT_MS) || 270_000;
+const FETCH_OVERALL_TIMEOUT_MS = Number(process.env.ELIZA_PROFESSION_FETCH_TIMEOUT_MS) || 90_000;
 
-/** Shorter waits between listing steps (opt-in: `ELIZA_PROFESSION_FAST_NAV=1`). */
-const PROFESSION_FAST_NAV = process.env.ELIZA_PROFESSION_FAST_NAV === "1";
+/** Shorter waits between listing steps. Default on; set `ELIZA_PROFESSION_FAST_NAV=0` for slower/stealth typing. */
+const PROFESSION_FAST_NAV = process.env.ELIZA_PROFESSION_FAST_NAV !== "0";
 /**
  * One nuclear pass, shorter settle, no progress PNGs around nuclear.
  * Default on for speed; set `ELIZA_PROFESSION_LITE_SETTLE=0` for legacy double-nuclear + screenshots.
@@ -125,30 +126,16 @@ const SEARCH_INPUT_SELECTORS = [
 
 function professionKeywordUrlVariants(keyword: string, locationSlug: string | null): string[] {
   const raw = (keyword.trim() || "fejlesztő").normalize("NFC");
-  const e = encodeURIComponent(raw);
-
-  const roots: string[] = [];
-  if (locationSlug) {
-    roots.push(`https://www.profession.hu/allasok/${locationSlug}/1`, `https://www.profession.hu/allasok/${locationSlug}`);
-  }
-  roots.push("https://www.profession.hu/allasok/1", "https://www.profession.hu/allasok");
-
   const out: string[] = [];
-  for (const root of roots) {
-    const u1 = new URL(root);
-    u1.searchParams.set("adv_pattern", raw);
-    out.push(u1.toString());
-    if (/\/\d+$/.test(new URL(root).pathname)) {
-      const u3 = new URL(root);
-      u3.searchParams.set("adv_pattern", raw);
-      u3.searchParams.set("page", "1");
-      out.push(u3.toString());
-    }
-    const ukw = new URL(root);
-    ukw.searchParams.set("keyword", raw);
-    out.push(ukw.toString());
+  if (locationSlug) {
+    const loc = new URL(`https://www.profession.hu/allasok/${locationSlug}/1`);
+    loc.searchParams.set("adv_pattern", raw);
+    out.push(loc.toString());
   }
-  return [...new Set(out)];
+  const national = new URL("https://www.profession.hu/allasok/1");
+  national.searchParams.set("adv_pattern", raw);
+  out.push(national.toString());
+  return out;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -247,8 +234,7 @@ function collectJobLinksFromCheerio(
   scope.find('a[href*="/allas/"]').each((_, a) => {
     if (cards.length >= maxCollect) return false;
     const href = $(a).attr("href")?.trim();
-    if (!href || /\/allasok\//i.test(href)) return;
-    if (!/\/allas\/[^?]+-\d{4,}/i.test(href)) return;
+    if (!href || !isProfessionJobListingHref(href)) return;
     const abs = href.startsWith("http")
       ? href
       : `https://www.profession.hu${href.startsWith("/") ? "" : "/"}${href}`;
@@ -333,7 +319,7 @@ async function findSearchInput(page: Page): Promise<Locator | null> {
 async function typeKeywordHuman(loc: Locator, keyword: string): Promise<void> {
   for (const ch of keyword) {
     if (ch === "\n" || ch === "\r") continue;
-    await loc.type(ch, { delay: randomBetween(100, 500) });
+    await loc.type(ch, { delay: randomBetween(PROFESSION_FAST_NAV ? 25 : 100, PROFESSION_FAST_NAV ? 70 : 500) });
   }
 }
 
@@ -424,7 +410,15 @@ async function scrollListingWarmup(page: Page): Promise<void> {
   await wiggleMouse(page);
 }
 
-async function settleAfterNavigation(page: Page, settleTag: string): Promise<void> {
+async function settleAfterNavigation(page: Page, settleTag: string, light = false): Promise<void> {
+  if (light) {
+    phLog("Settle: light (reused session)", settleTag);
+    await clickProfessionHungarianAcceptAllCookies(page);
+    await dismissProfessionHuOverlays(page);
+    await dismissObstructingModalsDynamic(page);
+    await settleSleep(250, 120);
+    return;
+  }
   const lite = PROFESSION_LITE_SETTLE;
   phLog("Settle: wait for cookie / CMP paint", settleTag);
   await settleSleep(550, 320);
@@ -456,6 +450,33 @@ async function settleAfterNavigation(page: Page, settleTag: string): Promise<voi
   phLog("Settle complete", settleTag);
 }
 
+export type ProfessionHuPlaywrightSession = {
+  browser: Browser;
+  page: Page;
+  listingsDone?: number;
+};
+
+export async function openProfessionHuPlaywrightSession(): Promise<ProfessionHuPlaywrightSession> {
+  const launchOpts: Parameters<typeof chromium.launch>[0] = {
+    headless: true,
+    args: STEALTH_CHROMIUM_ARGS,
+  };
+  if (process.env.ELIZA_PLAYWRIGHT_CHROME_CHANNEL === "chrome") {
+    launchOpts.channel = "chrome";
+  }
+  const browser = await chromium.launch(launchOpts);
+  const page = await browser.newPage({
+    userAgent: UA,
+    locale: "hu-HU",
+    viewport: { width: 1365, height: 900 },
+    timezoneId: "Europe/Budapest",
+  });
+  await initNavigatorWebdriverPatch(page);
+  await wiggleMouse(page);
+  await humanPause(PROFESSION_FAST_NAV ? 200 : 400, PROFESSION_FAST_NAV ? 550 : 1200);
+  return { browser, page };
+}
+
 /**
  * Tier B: Profession.hu — direct keyword URLs + soft overlays + main-scoped parse (avoids killing the search shell).
  * Enforces {@link FETCH_OVERALL_TIMEOUT_MS} for the whole run; on expiry saves DOM + PNG and throws.
@@ -465,19 +486,12 @@ export async function fetchProfessionHuJobsPlaywright(
   maxListings = 20,
   maxDetailVisits = 8,
   preferredLocation?: string | null,
+  session?: ProfessionHuPlaywrightSession,
 ): Promise<DiscoveredJob[]> {
   const listKw = keywords.trim() || "fejlesztő";
   const locSlug = professionHuLocationSlugFromPreference(preferredLocation);
   const urlVariants = professionKeywordUrlVariants(listKw, locSlug);
   const provider: DiscoveryProviderId = "profession";
-
-  const launchOpts: Parameters<typeof chromium.launch>[0] = {
-    headless: true,
-    args: STEALTH_CHROMIUM_ARGS,
-  };
-  if (process.env.ELIZA_PLAYWRIGHT_CHROME_CHANNEL === "chrome") {
-    launchOpts.channel = "chrome";
-  }
 
   phLog("Starting fetchProfessionHuJobsPlaywright", listKw);
   phLog(`Overall deadline ${FETCH_OVERALL_TIMEOUT_MS}ms (cookie/settle can be heavy; navigation + listing + details)`);
@@ -488,24 +502,16 @@ export async function fetchProfessionHuJobsPlaywright(
   const navTimeout = Math.min(28_000, Math.floor(FETCH_OVERALL_TIMEOUT_MS / 2));
   const refs: { browser: Browser | null; page: Page | null } = { browser: null, page: null };
   const { promise: overallTimeout, cancel: cancelOverallTimeout } = createOverallDeadline(FETCH_OVERALL_TIMEOUT_MS);
+  const reuseSession = Boolean(session);
 
   const run = async (): Promise<DiscoveredJob[]> => {
-    phLog("Launching Chromium");
-    const browser = await chromium.launch(launchOpts);
+    const owned = session ?? (await openProfessionHuPlaywrightSession());
+    const browser = owned.browser;
+    const page = owned.page;
     refs.browser = browser;
+    refs.page = page;
+    const lightSettle = Boolean(session?.listingsDone);
     try {
-      phLog("Opening new page");
-      const page = await browser.newPage({
-        userAgent: UA,
-        locale: "hu-HU",
-        viewport: { width: 1365, height: 900 },
-        timezoneId: "Europe/Budapest",
-      });
-      refs.page = page;
-      await initNavigatorWebdriverPatch(page);
-      phLog("Navigator patch applied; wiggle mouse");
-      await wiggleMouse(page);
-      await humanPause(PROFESSION_FAST_NAV ? 200 : 400, PROFESSION_FAST_NAV ? 550 : 1200);
       const professionRunT0 = Date.now();
 
       let cards: { url: string; title: string }[] = [];
@@ -517,19 +523,19 @@ export async function fetchProfessionHuJobsPlaywright(
         phLog(`Goto listing variant ${vi + 1}/${urlVariants.length}`, listingUrl);
         await page.goto(listingUrl, { waitUntil: "domcontentloaded", timeout: navTimeout });
         phLog("Post-goto: quick URL check before heavy settle (fail fast on bare /allasok redirect)");
-        await sleepNav(1100);
+        await sleepNav(lightSettle ? 400 : 1100);
         await clickProfessionHungarianAcceptAllCookies(page);
-        await sleepNav(400);
+        if (!lightSettle) await sleepNav(400);
         const urlFail = professionSearchNavigationFailureReason(page.url(), listKw);
         if (urlFail) {
           phLog(`URL validation failed pre-settle (variant ${vi + 1})`, `${urlFail} — ${page.url()}`);
           continue;
         }
 
-        phLog("URL bar OK — full settle + parse");
-        await sleepNav(1200);
-        await settleAfterNavigation(page, `listing-url-${vi}`);
-        await scrollListingWarmup(page);
+        phLog(lightSettle ? "URL bar OK — light settle + parse" : "URL bar OK — full settle + parse");
+        if (!lightSettle) await sleepNav(800);
+        await settleAfterNavigation(page, `listing-url-${vi}`, lightSettle);
+        if (!lightSettle) await scrollListingWarmup(page);
 
         const afterVariant = professionSearchNavigationFailureReason(page.url(), listKw);
         if (afterVariant) {
@@ -553,49 +559,31 @@ export async function fetchProfessionHuJobsPlaywright(
       }
 
       if (!navigationUrlValidated) {
-        phLog("Direct URL variants exhausted (URL and/or listing-content checks) — base listing + typed search");
-        await page.goto(professionListingFallbackEntry(preferredLocation), {
-          waitUntil: "domcontentloaded",
-          timeout: navTimeout,
-        });
-        await sleepNav(2400);
-        await settleAfterNavigation(page, "fallback-base");
-        await performProfessionListingSearch(page, listKw);
-        await scrollListingWarmup(page);
-
-        let navFail = professionSearchNavigationFailureReason(page.url(), listKw);
-        if (navFail) {
-          const canon = urlVariants[0];
-          phLog("Address bar still wrong after typed search — reload canonical adv_pattern URL", canon);
-          await page.goto(canon, { waitUntil: "domcontentloaded", timeout: navTimeout });
-          await sleepNav(1200);
-          await clickProfessionHungarianAcceptAllCookies(page);
-          await dismissProfessionHuOverlays(page);
-          await dismissObstructingModalsDynamic(page);
+        phLog("Direct URL variants exhausted — skipping typed-search fallback (HTTP path runs next)");
+        if (process.env.ELIZA_PROFESSION_TYPED_SEARCH === "1") {
+          phLog("Typed-search fallback enabled (ELIZA_PROFESSION_TYPED_SEARCH=1)");
+          await page.goto(professionListingFallbackEntry(preferredLocation), {
+            waitUntil: "domcontentloaded",
+            timeout: navTimeout,
+          });
+          await sleepNav(800);
+          await settleAfterNavigation(page, "fallback-base", lightSettle);
+          await performProfessionListingSearch(page, listKw);
           await scrollListingWarmup(page);
-          navFail = professionSearchNavigationFailureReason(page.url(), listKw);
+          if (professionSearchNavigationFailureReason(page.url(), listKw) && (await trySubmitSearchForm(page, listKw))) {
+            await sleepNav(800);
+            await page.waitForLoadState("domcontentloaded", { timeout: 8_000 }).catch(() => {});
+          }
+          const parsedFb = parseListingCardsScoped(await page.content(), maxListings, listKw);
+          cards = parsedFb.cards;
+          titles = parsedFb.titles;
+          if (
+            !professionSearchNavigationFailureReason(page.url(), listKw) &&
+            (cards.length === 0 || listingPlausiblyMatchesSearch(listKw, cards))
+          ) {
+            navigationUrlValidated = true;
+          }
         }
-        if (navFail && (await trySubmitSearchForm(page, listKw))) {
-          phLog("Post-submit: short wait + domcontentloaded");
-          await sleepNav(1200);
-          await page.waitForLoadState("domcontentloaded", { timeout: 8_000 }).catch(() => {});
-          await page.evaluate(() => window.scrollBy(0, 320));
-          await sleepNav(250);
-          navFail = professionSearchNavigationFailureReason(page.url(), listKw);
-        }
-        if (navFail) {
-          throw new Error(`Profession.hu navigation failure: ${navFail} (${page.url()})`);
-        }
-
-        const parsedFb = parseListingCardsScoped(await page.content(), maxListings, listKw);
-        cards = parsedFb.cards;
-        titles = parsedFb.titles;
-        if (cards.length > 0 && !listingPlausiblyMatchesSearch(listKw, cards)) {
-          throw new Error(
-            `Profession.hu navigation failure: listing content does not match "${listKw}" (titles/slugs unrelated; URL was ${page.url()})`,
-          );
-        }
-        phLog(`Fallback path URL + listing OK; ${cards.length} cards`);
       }
 
       if (cards.length === 0) {
@@ -660,10 +648,13 @@ export async function fetchProfessionHuJobsPlaywright(
       phLog(`Fetch complete: ${jobs.length} jobs`);
       return jobs;
     } finally {
-      phLog("Closing browser (run inner finally)");
-      await browser.close().catch(() => {});
-      refs.browser = null;
-      refs.page = null;
+      if (session) session.listingsDone = (session.listingsDone ?? 0) + 1;
+      if (!reuseSession) {
+        phLog("Closing browser (run inner finally)");
+        await browser.close().catch(() => {});
+        refs.browser = null;
+        refs.page = null;
+      }
     }
   };
 
@@ -681,7 +672,7 @@ export async function fetchProfessionHuJobsPlaywright(
         phLog("No page handle yet — skipping DOM/screenshot");
       }
       if (timeoutBrowser) {
-        phLog("Closing browser after timeout");
+        phLog(reuseSession ? "Closing reused browser after timeout (caller must reopen)" : "Closing browser after timeout");
         await timeoutBrowser.close().catch(() => {});
         refs.browser = null;
         refs.page = null;

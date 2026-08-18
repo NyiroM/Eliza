@@ -24,8 +24,13 @@
     "debug:profession-microsteps": "tsx scripts/debug-profession-hu-microsteps.mts",
     "test:profession-search": "tsx scripts/integration-profession-hu-search.mts",
     "test:indeed-job-url": "tsx scripts/verify-indeed-job-url.mts",
+    "test:job-description-enrich": "tsx scripts/verify-job-description-enrich.mts",
+    "test:language-veto": "tsx scripts/verify-language-veto.mts",
+    "test:no-code-veto": "tsx scripts/verify-no-code-veto.mts",
     "test:job-id-canonicalization": "tsx scripts/verify-job-id-canonicalization.mts",
     "test:location-geography-veto": "tsx scripts/verify-location-geography-veto.mts",
+    "test:hard-veto-policy": "tsx scripts/verify-hard-veto-policy.mts",
+    "test:eval-queue-failure": "tsx scripts/verify-eval-queue-failure-visibility.mts",
     "benchmark:ollama-tuning": "tsx scripts/benchmark-ollama-tuning.mts"
   },
   "dependencies": {

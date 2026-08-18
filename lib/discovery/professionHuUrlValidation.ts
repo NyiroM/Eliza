@@ -1,10 +1,7 @@
 // lib/discovery/professionHuUrlValidation.ts — Profession.hu listing URL must reflect the intended search.
 
-import {
-  firstCommaLocationSegment,
-  JOB_BOARD_BROAD_LOCATION_SLUGS,
-  segmentToLocationSlug,
-} from "./locationPreferenceShared";
+import { JOB_BOARD_BROAD_LOCATION_SLUGS } from "./locationPreferenceShared";
+import { primaryCitySlugForJobBoardSearch } from "../pipeline/hungaryGeography";
 
 function norm(s: string): string {
   return s.normalize("NFC").trim().toLowerCase();
@@ -78,13 +75,20 @@ export function professionSearchNavigationFailureReason(pageUrl: string, expecte
 }
 
 /**
+ * True for a job-posting href (`/allas/slug-1234567` or `/allas/1234567`), not a listing index.
+ */
+export function isProfessionJobListingHref(href: string): boolean {
+  const path = href.split("?")[0] ?? href;
+  if (/\/allasok\//i.test(path)) return false;
+  return /\/allas\/[^?]*\d{4,}/i.test(path);
+}
+
+/**
  * Maps dashboard target location (e.g. "Budapest, Hungary") to a Profession.hu path segment after `/allasok/`.
  * Returns null when unset, too broad, or not slug-safe.
  */
 export function professionHuLocationSlugFromPreference(preferredLocation: string | null | undefined): string | null {
-  const first = firstCommaLocationSegment(preferredLocation);
-  if (!first) return null;
-  const slug = segmentToLocationSlug(first);
+  const slug = primaryCitySlugForJobBoardSearch(preferredLocation);
   if (!slug || slug.length > 48) return null;
   if (JOB_BOARD_BROAD_LOCATION_SLUGS.has(slug)) return null;
   return slug;

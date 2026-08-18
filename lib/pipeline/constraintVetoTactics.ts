@@ -61,14 +61,19 @@ export function buildConstraintTacticHints(
   }
   const ploc = typeof preferredLocation === "string" ? preferredLocation.trim() : "";
   if (ploc.length > 0) {
-    const primary = ploc.split(",")[0]?.trim() ?? ploc;
+    const segmentPreview = ploc
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(", ");
     if (stanceFor(tactics, "location") === "default") {
       out.push(
-        `DASHBOARD_GEOGRAPHY: tactics.location=default — compare DECISION_BRIEF.preferred_work_location / primary token "${primary}" to job_location and JOB_TEXT; material city/region mismatch ⇒ hard veto (same stance family as remote_zone default).`,
+        `DASHBOARD_GEOGRAPHY: tactics.location=default — preferred_work_location may be comma-separated cities/counties (e.g. "${segmentPreview}"); treat ANY listed place or county-covered city as aligned; material mismatch only when job on-site base is outside ALL of them; hard veto on mismatch.`,
       );
     } else {
       out.push(
-        `DASHBOARD_GEOGRAPHY: tactics.location=strong_preference — same comparison; material mismatch ⇒ large negative constraint_delta and "Location Conflict" badge, never hard veto for geography alone.`,
+        `DASHBOARD_GEOGRAPHY: tactics.location=strong_preference — same multi-place/county rule; material mismatch ⇒ large negative constraint_delta and "Location Conflict" badge, never hard veto for geography alone.`,
       );
     }
   }

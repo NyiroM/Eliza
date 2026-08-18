@@ -76,6 +76,8 @@ import {
   mergeOfflineVetos,
   type OfflineVetoResult,
 } from "./pipeline/locationGeographyVeto";
+import { inferLanguageRequirementVeto } from "./pipeline/languageRequirementVeto";
+import { inferNoCodeRoleVeto } from "./pipeline/noCodeRoleVeto";
 import {
   buildSemanticFitScoreReviewPrompt,
   type SemanticFitDecisionBrief,
@@ -367,86 +369,6 @@ function parseSemanticHighlights(raw: unknown): SemanticHighlight[] {
   return out.slice(0, SEMANTIC_HIGHLIGHT_LIMITS.returnMax);
 }
 
-function detectNoCodeConstraint(constraints: string[]): boolean {
-  return constraints.some((constraint) =>
-    /\b(no[-\s]?code|cannot code|can't code|i cannot code|non[-\s]?coding)\b/i.test(constraint),
-  );
-}
-
-function detectProgrammingRequirement(
-  requiredSkills: string[],
-  jobText: string,
-): string | null {
-  const programmingSkills = [
-    "python",
-    "java",
-    "javascript",
-    "typescript",
-    "c",
-    "c++",
-    "c#",
-    "go",
-    "rust",
-    "ruby",
-    "php",
-    "kotlin",
-    "swift",
-  ];
-  const requiredSet = new Set(requiredSkills.map((s) => s.toLowerCase()));
-  for (const skill of programmingSkills) {
-    if (requiredSet.has(skill) || new RegExp(`\\b${skill.replace(/[+]/g, "\\+")}\\b`, "i").test(jobText)) {
-      return skill.toUpperCase();
-    }
-  }
-  return null;
-}
-
-function normalizeConstraintText(value: string): string {
-  return ` ${value.toLowerCase().replace(/[^a-z0-9+#/.\-\s]/g, " ").replace(/\s+/g, " ").trim()} `;
-}
-
-function hasNegativeConstraintSignal(value: string): boolean {
-  const t = value.toLowerCase();
-  // Avoid false positives: "should not be vetoed", "not a nice-to-have", "without exception",
-  // "only ... English and Hungarian" (bare "not" / "without" are not exclusion intent).
-  return /\b(?:no|cannot|can't|do not|don't|excluding|exclude|avoid|never|will not|not willing|not interested|without(?!\s+exception))\b/i.test(
-    t,
-  );
-}
-
-function detectUniversalNegativeConstraintConflict(
-  constraints: string[],
-  requiredItems: string[],
-): string | null {
-  if (!constraints.length || !requiredItems.length) return null;
-  const required = [...new Set(requiredItems.map((s) => s.trim()).filter(Boolean))].sort(
-    (a, b) => b.length - a.length,
-  );
-
-  for (const constraint of constraints) {
-    if (!hasNegativeConstraintSignal(constraint)) continue;
-    const normalizedConstraint = normalizeConstraintText(constraint);
-
-    for (const skill of required) {
-      const normalizedSkill = normalizeConstraintText(skill).trim();
-      if (normalizedSkill.length < 2) continue;
-
-      if (normalizedConstraint.includes(` ${normalizedSkill} `)) {
-        return skill;
-      }
-
-      const skillTokens = normalizedSkill.split(" ").filter((t) => t.length > 1);
-      if (skillTokens.length > 1) {
-        const allTokensPresent = skillTokens.every((token) =>
-          normalizedConstraint.includes(` ${token} `),
-        );
-        if (allTokensPresent) return skill;
-      }
-    }
-  }
-  return null;
-}
-
 function buildHardVetoReview(
   baseline: FitScoreResult,
   reason: string,
@@ -666,6 +588,12 @@ async function semanticFitScoreReviewWithLlm(params: {
       params.tactics,
     ),
     inferLocationGeographyVeto(geoInput),
+    inferLanguageRequirementVeto(params.constraints, params.combinedJobText),
+    inferNoCodeRoleVeto(
+      params.constraints,
+      params.combinedJobText,
+      params.jobStructForScorer.required_skills,
+    ),
   );
 
   const prompt = buildSemanticFitScoreReviewPrompt({
@@ -878,29 +806,20 @@ export async function runPipelineDetailed(
   };
   const jobBoardMetadataForScorer = buildJobBoardMetadataForScorer(jobBoardMetadata, constraints);
 
-  const hardRequirementsForVeto = [
-    ...jobParsed.required_skills,
-    jobParsed.required_seniority,
-    jobParsed.education ?? "",
-    jobParsed.work_model,
-    jobParsed.job_type,
-  ].filter((v) => typeof v === "string" && v.trim().length > 0 && v.toLowerCase() !== "unknown");
-
-  const universalConstraintConflict = detectUniversalNegativeConstraintConflict(
+  const languageVeto = inferLanguageRequirementVeto(constraints, combinedJobText);
+  const noCodeVeto = inferNoCodeRoleVeto(
     constraints,
-    hardRequirementsForVeto,
-  );
-  const noCodeConstraint = detectNoCodeConstraint(constraints);
-  const requiredProgrammingSkill = detectProgrammingRequirement(
-    jobParsed.required_skills,
     combinedJobText,
+    jobParsed.required_skills,
   );
+  // General "user excluded X vs job requires X" clashes are left to semanticFitScoreReviewWithLlm
+  // (NEGATION_SOFT_CHECK + quoted evidence). Substring pre-veto caused false positives (e.g. can't vs CAN bus).
   const hardVetoReason =
-    universalConstraintConflict
-      ? `Vetoed: You explicitly excluded "${universalConstraintConflict}", but it is a required condition for this role.`
-      : noCodeConstraint && requiredProgrammingSkill
-      ? `Vetoed: This role requires ${requiredProgrammingSkill}, which you explicitly excluded.`
-      : null;
+    languageVeto.vetoed && languageVeto.veto_reason
+      ? languageVeto.veto_reason
+      : noCodeVeto.vetoed && noCodeVeto.veto_reason
+        ? noCodeVeto.veto_reason
+        : null;
 
   const decisionBrief: SemanticFitDecisionBrief = {
     job_location: jobParsed.job_location,
@@ -944,14 +863,23 @@ export async function runPipelineDetailed(
 
   if (!hardVetoReason) {
     semanticReview = applyTacticsVetoRelaxation(semanticReview, score, constraintTactics);
-    semanticReview = enforceLocationGeographyOnReview(semanticReview, {
-      preferredLocation,
-      jobLocation: jobParsed.job_location,
-      jobTextEnglish: jobParsed.english_job_text,
-      combinedJobText,
-      workModel: jobParsed.work_model,
-      tactics: constraintTactics,
-    });
+    semanticReview = enforceLocationGeographyOnReview(
+      semanticReview,
+      {
+        preferredLocation,
+        jobLocation: jobParsed.job_location,
+        jobTextEnglish: jobParsed.english_job_text,
+        combinedJobText,
+        workModel: jobParsed.work_model,
+        tactics: constraintTactics,
+      },
+      {
+        fit_score: score.fit_score,
+        matched_skills: score.matched_skills ?? [],
+        missing_skills: score.missing_skills ?? [],
+        seniority_match: score.seniority_match,
+      },
+    );
   }
 
   // Run Salary Oracle (resilient)

@@ -131,6 +131,12 @@ export const DISCOVERY_QUEUE_DRAIN_BATCH = Number.isFinite(_drainBatch)
   ? Math.min(20, Math.max(1, _drainBatch))
   : 4;
 
+const _maxSeeds = parseInt(process.env.ELIZA_DISCOVERY_MAX_SEED_PHRASES ?? "", 10);
+/** Distinct search phrases fetched per provider per sync. Default 10; env clamp 1–10. */
+export const DISCOVERY_MAX_SEED_PHRASES = Number.isFinite(_maxSeeds)
+  ? Math.min(10, Math.max(1, _maxSeeds))
+  : 10;
+
 /**
  * Discovery pipeline failure handling: how many attempts before a job is treated as
  * evaluated (written to non-matches with the error), and the cooldown between retries

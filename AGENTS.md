@@ -14,7 +14,7 @@ Human-oriented overview: **[README.md](./README.md)**. Release history: **[CHANG
 - **Tailwind:** `app/globals.css` may use `@source` so utilities defined under `lib/**/*.ts` are picked up (for example shared class strings in `lib/ui/`).
 - **Inference:** Ollama via `lib/llm/ollama.ts`; default host from **`OLLAMA_HOST`** (see `.env.example`).
 - **LAN gate (step 1):** `npm run dev` listens on **`0.0.0.0`**. Optional **`ELIZA_GATE_PASSWORD`** → login at `/login`; **`proxy.ts`** verifies the gate cookie and allows same-origin private LAN Origins. See **`lib/auth/`**, **`GET /api/server-info`**. Step 2 (WAN) not implemented.
-- **Discovery Hub:** sync and queue under `app/api/discovery/`; logic in `lib/discovery/` (catalog, `sync.ts`, `processEvalQueue.ts`, Playwright fetchers, **`dupeFingerprint.ts` / `dupeIndexStore.ts`**, **`suppressedStore.ts`**).
+- **Discovery Hub:** sync and queue under `app/api/discovery/`; logic in `lib/discovery/` (catalog, `sync.ts`, `processEvalQueue.ts`, `scheduleEvalQueueResume.ts`, Playwright fetchers with **one reused Chromium per Indeed/Profession sync**, **`dupeFingerprint.ts` / `dupeIndexStore.ts`**, **`suppressedStore.ts`**).
 - **Contracts:** shared types in `types/` (especially `types/discovery.ts` for hub rows and API shapes).
 - **Limits / discovery env defaults:** `config/constants.ts` (overrides via env vars listed in `.env.example` and README).
 
@@ -24,7 +24,7 @@ Human-oriented overview: **[README.md](./README.md)**. Release history: **[CHANG
 - `npx tsc --noEmit` — typecheck.
 - `npm run build` — production build (run when changing `app/`, `lib/`, or config).
 
-Optional checks: `npm run test:salary-oracle`, `npm run test:location-geography-veto`, `npx tsx scripts/verify-discovery-dedupe.mts`.
+Optional checks: `npm run lint`, `npx tsc --noEmit`, `npm run test:salary-oracle`, `npm run test:location-geography-veto`, `npm run test:language-veto`, `npm run test:no-code-veto`, `npm run test:job-description-enrich`, `npm run test:eval-queue-failure`, `npx tsx scripts/verify-discovery-dedupe.mts`.
 
 ## Local data (never commit)
 
@@ -40,7 +40,7 @@ Optional checks: `npm run test:salary-oracle`, `npm run test:location-geography-
 
 ## Discovery behavior (high level)
 
-- **Sync** ingests provider listings into the catalog; **cross-provider dedupe** uses a persisted index on disk.
+- **Sync** ingests provider listings into the catalog; **cross-provider dedupe** uses a persisted index on disk. Eval starts as soon as the first provider returns (`ELIZA_DISCOVERY_EVAL_DURING_FETCH=0` waits until all fetches finish).
 - **`POST /api/discovery/reevaluate`** re-queues evaluation without necessarily re-fetching all listings (see route and `lib/discovery` callers).
 - **Suppressed job IDs** are respected across sync, re-evaluate, and queue processing.
 

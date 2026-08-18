@@ -15,10 +15,14 @@ const PROVIDER_SHORT: Record<DiscoveryProviderId, string> = {
   profession: "Profession.hu",
 };
 
-const PROVIDER_SEED_DEFAULT_MS: Record<DiscoveryProviderId, number> = {
-  indeed: 60_000,
-  linkedin: 8_000,
-  profession: 90_000,
+/**
+ * Fetch-lane ETA: listing-only search with one reused Chromium per Indeed/Profession sync.
+ * JD enrich + Ollama stay on the eval lane. `cap` is the Playwright/HTTP budget if a seed hangs.
+ */
+const FETCH_PACE_MS: Record<DiscoveryProviderId, { first: number; next: number; cap: number }> = {
+  linkedin: { first: 8_000, next: 6_000, cap: 45_000 },
+  indeed: { first: 28_000, next: 12_000, cap: 45_000 },
+  profession: { first: 35_000, next: 18_000, cap: 90_000 },
 };
 
 const PROVIDER_ORDER: DiscoveryProviderId[] = ["linkedin", "indeed", "profession"];
@@ -88,8 +92,49 @@ function remainingSeeds(snap: DiscoveryFetchProviderSnap): number {
   return Math.max(0, total - (snap.seed_index || 0) + (snap.seed_index > 0 ? 1 : 0));
 }
 
+function completedSeedCount(snap: DiscoveryFetchProviderSnap): number {
+  if (snap.status === "pending") return 0;
+  if (snap.status === "done" || snap.status === "error") return snap.seed_total || 0;
+  return Math.max(0, (snap.seed_index || 0) - 1);
+}
+
+/** Later phrases reuse Chromium; ignore first-phrase launch/settle and timeout-ish samples. */
+function restSeedUnitMs(id: DiscoveryProviderId, snap: DiscoveryFetchProviderSnap): number {
+  const pace = FETCH_PACE_MS[id];
+  const measured = snap.last_seed_ms;
+  if (completedSeedCount(snap) < 2 || measured == null || !Number.isFinite(measured) || measured <= 0) {
+    return pace.next;
+  }
+  if (measured >= pace.cap * 0.75) return pace.next;
+  return Math.min(pace.next * 2.2, Math.max(pace.next * 0.45, measured));
+}
+
+function currentSeedUnitMs(id: DiscoveryProviderId, snap: DiscoveryFetchProviderSnap): number {
+  const idx = snap.seed_index || 0;
+  if (snap.status === "pending" || idx <= 1) return FETCH_PACE_MS[id].first;
+  return restSeedUnitMs(id, snap);
+}
+
+function currentSeedLeftMs(id: DiscoveryProviderId, snap: DiscoveryFetchProviderSnap, nowMs: number): number {
+  const unit = currentSeedUnitMs(id, snap);
+  if (snap.status !== "running") return unit;
+  const start = parseIsoMs(snap.seed_started_at);
+  const elapsed = start != null ? Math.max(0, nowMs - start) : 0;
+  return Math.max(2_000, unit - elapsed);
+}
+
+function providerFetchEtaMs(id: DiscoveryProviderId, snap: DiscoveryFetchProviderSnap, nowMs: number): number {
+  const left = remainingSeeds(snap);
+  if (left <= 0) return 0;
+  const pace = FETCH_PACE_MS[id];
+  if (snap.status === "pending") {
+    return pace.first + Math.max(0, left - 1) * pace.next;
+  }
+  return currentSeedLeftMs(id, snap, nowMs) + Math.max(0, left - 1) * restSeedUnitMs(id, snap);
+}
+
 /** Wall time left for fetch: providers run in parallel, so this is max(per source), not a sum. */
-function fetchEtaMs(lane: DiscoveryFetchLane): number | null {
+function fetchEtaMs(lane: DiscoveryFetchLane, nowMs: number): number | null {
   if (lane.status !== "running") return 0;
   const providers = lane.providers ?? {};
   const ids = (Object.keys(providers) as DiscoveryProviderId[]).length
@@ -101,17 +146,17 @@ function fetchEtaMs(lane: DiscoveryFetchLane): number | null {
     const tot = lane.seed_total ?? 0;
     const idx = lane.seed_index ?? 0;
     const left = Math.max(0, tot - idx + (idx > 0 ? 1 : 0));
-    const unit = lane.last_seed_ms ?? 20_000;
+    const id = lane.current_provider;
+    const pace = id ? FETCH_PACE_MS[id] : { first: 12_000, next: 10_000, cap: 45_000 };
+    const unit = idx <= 1 ? pace.first : (lane.last_seed_ms && lane.last_seed_ms < pace.cap * 0.75 ? lane.last_seed_ms : pace.next);
     return left > 0 ? left * unit : null;
   }
   let slowest: number | null = null;
   for (const id of ids) {
     const snap = providers[id];
     if (!snap) continue;
-    const left = remainingSeeds(snap);
-    if (left <= 0) continue;
-    const unit = snap.last_seed_ms ?? PROVIDER_SEED_DEFAULT_MS[id] ?? 20_000;
-    const ms = left * unit;
+    const ms = providerFetchEtaMs(id, snap, nowMs);
+    if (ms <= 0) continue;
     slowest = slowest == null ? ms : Math.max(slowest, ms);
   }
   return slowest;
@@ -236,7 +281,7 @@ export function DiscoveryLiveProgressBoard({
   const evalLane = evalFromLegacy(p);
   const runStart = parseIsoMs(p.pipeline_run_started_at) ?? parseIsoMs(fetchLane.started_at);
   const elapsed = runStart != null ? Math.max(0, nowMs - runStart) : null;
-  const fetchMs = fetchEtaMs(fetchLane);
+  const fetchMs = fetchEtaMs(fetchLane, nowMs);
   const evalMs = evalEtaMs(evalLane, nowMs);
   const fetchRunning = fetchLane.status === "running";
   const evalRunning = evalLane.status === "running";

@@ -718,8 +718,8 @@ EDUCATION (strict — degrees, qualifications, institutions ONLY):
 - required_seniority: infer from level wording and years; unknown if unclear.
 
 LOCATION & WORK MODEL (BE AGGRESSIVE):
-- Scan the entire posting for cities, regions, countries, "based in", "office in", EMEA/APAC, etc. Populate job_location with the best single line (e.g. "London, UK" or "Remote — US only"). If ANY recognizable place or region appears, you MUST set job_location — do not leave null when geography is stated inline.
-- If the text mentions a recognizable city or region name, you MUST put it in job_location. Do not leave location unspecified.
+- Scan the entire posting for the **role’s** duty station (hiring country/city, “based in”, “join our team in”, Location:). Populate job_location with that line (e.g. "Hungary" or "Budapest, HU" or "Remote — US only"). Company **headquarters / HQ / head office** in another city is not the job location when the role is tied to a different country (e.g. team in Hungary + HQ in Prague → Hungary).
+- If the text mentions a recognizable city or region name for the role base, you MUST put it in job_location. Do not leave location unspecified. Do not prefer HQ over the stated hiring country.
 - work_model: Map explicit signals — "remote", "WFH", "work from home", "fully distributed" → remote; "hybrid", "2 days office" → hybrid; "on-site", "onsite", "in-office", "office-based", "in person" → on-site. If the text only implies office work without remote/hybrid wording, prefer on-site when an office location is given. Use "unknown" ONLY when there is truly no remote/hybrid/office signal at all.
 
 JOB TYPE (job-board style):

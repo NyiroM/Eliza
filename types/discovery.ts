@@ -123,6 +123,8 @@ export type DiscoveryFetchProviderSnap = {
   seed_total: number;
   jobs_new?: number;
   last_seed_ms?: number;
+  /** ISO time when the current seed phrase fetch began (per source; used for Est. remaining). */
+  seed_started_at?: string;
 };
 
 export type DiscoveryFetchLane = {

@@ -14,11 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ollama runtime tuning env knobs** (`lib/llm/ollama.ts`) — **`OLLAMA_TIMEOUT_MS`**, **`OLLAMA_NUM_PREDICT`** (num_predict ceiling), and **`OLLAMA_NUM_CTX`** now override the previously hardcoded defaults (all clamped to safe ranges). Documented in **`.env.example`**. Helps run the pipeline on weak / CPU-only hardware.
 - **`ELIZA_OLLAMA_FORCE_SCHEMA`** — when truthy, JSON-Schema-constrained output is applied to the relevance and semantic-fit calls on **every** model, not just the schema-tuned `gemma` / `qwen2.5` / `llama3.1:8b` families. Prevents unconstrained small models (e.g. `llama3.2`) from generating until the timeout.
 
+### Changed
+
+- **Discovery seed phrases** — each sync fetches the first **10** comma-separated search phrases per provider (was 5). Still clamped 1–10 via **`ELIZA_DISCOVERY_MAX_SEED_PHRASES`**.
+- **Discovery fetch speed** — Indeed and Profession.hu reuse one Playwright browser across seed phrases. Profession listing-time detail visits default to **0**; Indeed hydrates up to **4** SERP split-pane JDs (`ELIZA_INDEED_DETAIL_VISITS`). Empty Indeed seeds fail fast (~6–10s card wait, no widening ladder). Profession tries two listing URLs then HTTP fallback (slug `/allas/…-id` links). Profession overall timeout default is **90s**. Live progress **Est. remaining** uses these paces.
+
 ### Fixed
 
-- **Discovery live progress** — the hub shows **Fetch** and **Ollama** as two lanes (sources/seeds vs jobs scored), with remaining work and a finish-time estimate. Eval starts as soon as the first provider returns (`ELIZA_DISCOVERY_EVAL_DURING_FETCH=0` waits). The board stays visible while fetch continues and after the run finishes (**Last run**).
-- **Discovery silent eval drops** — after max pipeline retries a job is written to **`non_matches.jsonl`** with the last error (still marked evaluated so it does not loop). Overnight / closed-tab drains resume in-process after failure cooldown (`lib/discovery/scheduleEvalQueueResume.ts`; disable with **`ELIZA_DISCOVERY_SERVER_DRAIN=0`**). A provider fetch that returns **0 listings with no HTTP error** now sets **`last_error`** so empty scrape/block is visible on the hub.
+- **HQ vs hiring country** — geography veto ignores company headquarters mentions (e.g. Prague HQ) when the role is hired into Hungary; a Hungary-wide/remote listing aligns with Budapest/Pest target lists. Country names in office lists (Latvia, Serbia, Hungary) are not treated as the duty city; LinkedIn card **Location:** is kept after detail enrich. Verifier: **`npm run test:location-geography-veto`**.
+- **LinkedIn slug detail enrich** — guest/view URLs like `…/jobs/view/ai-research-engineer-aidrive-at-aimotive-4406398076` now yield the numeric posting id; HTTP guest fetch plus Playwright fallback. Title-only listings after enrich are **non-matches**, not inflated fit scores. Verifier: **`npm run test:job-description-enrich`**.
+- **Indeed title-only eval** — isolated `/viewjob` Playwright hits Indeed **Security Check**, so listings stayed title-only and were dumped as non-matches. Sync now clicks SERP cards in the same search session; **existing** thin Indeed catalog rows are re-fetched via `jobs?vjk=` (one browser), written back to `jobs.jsonl`, unmarked as evaluated, and re-queued. AI reevaluate does the same hydrate before scoring. Cap: `ELIZA_INDEED_CATALOG_HYDRATE_MAX` (default 100).
+- **Indeed detail `page.evaluate`** — Playwright string scripts are not function bodies; `return` threw `SyntaxError: Illegal return statement`. Eval enrich now uses a function callback.
+- **Profession.hu HTTP listing parse** — slug URLs like `/allas/title-city-1234567` were dropped (`/allas/\d+` only), so the Playwright-timeout HTTP fallback returned 0 jobs.
+- **No-code / production-code hard veto** — offline veto when constraints exclude writing/reading code: coding-core titles, or duties that are writing/reading/debugging/shipping software (any language, firmware, PRs). Explicit “no coding required” skips duty matches. Non-coding Engineer/Sales/Application titles stay unvetoed. Verifier: **`npm run test:no-code-veto`**.
 - **Default Ollama model** — `DEFAULT_OLLAMA_MODEL` changed from the invalid tag `gemma4:e4b` to the real, lightweight, schema-tuned **`gemma3n:e4b`** so the fallback model passes the install check instead of always erroring.
+- **Discovery silent eval drops** — after max pipeline retries a job is written to **`non_matches.jsonl`** with the last error (still marked evaluated so it does not loop). Overnight / closed-tab drains resume in-process after failure cooldown (`lib/discovery/scheduleEvalQueueResume.ts`; disable with **`ELIZA_DISCOVERY_SERVER_DRAIN=0`**). A provider fetch that returns **0 listings with no HTTP error** now sets **`last_error`** so empty scrape/block is visible on the hub.
+- **Multi-city target location** — LinkedIn guest search uses the primary city (`Budapest, Hungary`), not the full comma list. Geography scoring/veto treats any listed city/county (plus Pest-belt towns such as Göd / Visegrád / Biatorbágy) as aligned; a model location-only veto is lifted when the server set matches. Verifier: **`npm run test:location-geography-veto`**.
+- **Discovery live progress** — the hub shows **Fetch** and **Ollama** as two lanes (sources/seeds vs jobs scored), with remaining work and a finish-time estimate. Fetch snapshots stay visible while eval runs.
 
 ## [0.5.0] — 2026-05-15
 
@@ -39,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Universal substring constraint pre-veto** — removed deterministic `can't` / `exclude` token matching against required skills (false veto when user wrote "can't" but job required **CAN** bus). General exclusion clashes use the semantic scorer (`NEGATION_SOFT_CHECK`); offline hard veto remains for language, no-code, and geography. Verifier: **`npm run test:hard-veto-policy`**.
 - **Discovery “stuck” on one job** — eval-queue processing bumps **`updatedAt` every 45s** during `runPipelineDetailed`; hub copy explains multi-step Ollama work per row.
 - **LinkedIn / HTTP discovery hangs** — guest LinkedIn, **Indeed RSS**, and **Profession.hu** list fetches use **`timedDiscoveryFetch`** with **`DISCOVERY_HTTP_FETCH_TIMEOUT_MS`** (default **45s**). Drain TTL extended while **`process-queue`** still has work.
 - **Reevaluate vs fresh constraints** — `runPipelineDetailed` reloads **`user_constraints.json`** twice so edits during long LLM steps apply before veto and salary.

@@ -2,18 +2,21 @@
 import type { DiscoveredJob, DiscoveryProviderId } from "../../types/discovery";
 import { discoveryTerminalLog } from "./discoveryTerminalLog";
 import { warnIfPlaywrightChromiumMissingForDiscovery } from "./playwrightChromiumPreflight";
-import { fetchIndeedJobsPlaywright } from "./sources/indeedPlaywright";
+import { fetchIndeedJobsPlaywright, openIndeedPlaywrightSession, scrapeIndeedJobsOnPage } from "./sources/indeedPlaywright";
 import { fetchIndeedRssJobs } from "./sources/indeedRss";
 import { fetchLinkedInGuestJobs } from "./sources/linkedinGuest";
 import { fetchProfessionHuJobs } from "./sources/professionHu";
-import { fetchProfessionHuJobsPlaywright } from "./sources/professionHuPlaywright";
+import {
+  fetchProfessionHuJobsPlaywright,
+  openProfessionHuPlaywrightSession,
+  type ProfessionHuPlaywrightSession,
+} from "./sources/professionHuPlaywright";
+import { DISCOVERY_MAX_SEED_PHRASES } from "../../config/constants";
+import { linkedInLocationFromPreference } from "../pipeline/hungaryGeography";
 import { buildWideningLadder, truncateHint } from "./searchKeywords";
 
-/** Caps how many distinct seed phrases hit the network per provider. Override: `ELIZA_DISCOVERY_MAX_SEED_PHRASES` (1–10). */
-const rawMaxSeeds = parseInt(process.env.ELIZA_DISCOVERY_MAX_SEED_PHRASES ?? "", 10);
-export const DISCOVERY_MAX_SEED_PHRASES_EFFECTIVE = Number.isFinite(rawMaxSeeds)
-  ? Math.min(10, Math.max(1, rawMaxSeeds))
-  : 5;
+/** Caps how many distinct seed phrases hit the network per provider. Override: `ELIZA_DISCOVERY_MAX_SEED_PHRASES` (1–10, default 10). */
+export const DISCOVERY_MAX_SEED_PHRASES_EFFECTIVE = DISCOVERY_MAX_SEED_PHRASES;
 
 export type FetchPhraseProgressEvent =
   | {
@@ -38,8 +41,8 @@ export type FetchJobsProgressOpts = {
   onPhrase?: (provider: DiscoveryProviderId, ev: FetchPhraseProgressEvent) => void | Promise<void>;
 };
 
-/** Profession.hu: one Playwright session is expensive; do not burn time on token-dropping retries. */
-function professionSearchAttempts(seed: string): string[] {
+/** Playwright listing fetch is expensive; do not burn empty SERPs on token-dropping retries. */
+function exactSeedAttempts(seed: string): string[] {
   const t = seed.trim();
   return t ? [t] : [];
 }
@@ -61,6 +64,9 @@ const PROVIDER_LABEL: Record<DiscoveryProviderId, string> = {
   profession: "Profession.hu",
 };
 
+/** Stop extra seed phrases after this many consecutive empty fetches (blocked/empty scrape). */
+const EMPTY_SEED_ABORT_AFTER = 2;
+
 function formatHint(provider: DiscoveryProviderId, parts: string[]): string | null {
   if (parts.length === 0) return null;
   const label = PROVIDER_LABEL[provider];
@@ -72,13 +78,21 @@ async function fetchProfessionOnce(
   keywords: string,
   maxListings: number,
   preferred_location?: string | null,
+  session?: ProfessionHuPlaywrightSession,
 ): Promise<DiscoveredJob[]> {
   const skipPw = process.env.ELIZA_DISCOVERY_PLAYWRIGHT === "0";
   if (!skipPw) {
     try {
       const rawDv = parseInt(process.env.ELIZA_PROFESSION_DETAIL_VISITS ?? "", 10);
-      const detailVisits = Number.isFinite(rawDv) ? Math.min(8, Math.max(0, rawDv)) : 1;
-      return await fetchProfessionHuJobsPlaywright(keywords, maxListings, detailVisits, preferred_location);
+      const detailVisits = Number.isFinite(rawDv) ? Math.min(8, Math.max(0, rawDv)) : 0;
+      const pwJobs = await fetchProfessionHuJobsPlaywright(
+        keywords,
+        maxListings,
+        detailVisits,
+        preferred_location,
+        session,
+      );
+      if (pwJobs.length > 0) return pwJobs;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn("[discovery] Profession Playwright failed, using HTTP fallback:", msg);
@@ -94,20 +108,19 @@ async function fetchLinkedInResilient(
   progress: FetchJobsProgressOpts | undefined,
   preferred_location: string | null | undefined,
 ): Promise<{ jobs: DiscoveredJob[]; hint: string | null; error?: string }> {
-  const linkedInLocation =
-    typeof preferred_location === "string" && preferred_location.trim().length > 0
-      ? preferred_location.trim()
-      : "Hungary";
+  const linkedInLocation = linkedInLocationFromPreference(preferred_location);
   const byId = new Map<string, DiscoveredJob>();
   const notes: string[] = [];
   let lastHttp: string | undefined;
   const kwTotal = progress?.keywordsInListTotal ?? orderedPhrases.length;
   const seedsTotal = orderedPhrases.length;
+  let emptySeedStreak = 0;
 
   outer: for (let si = 0; si < orderedPhrases.length; si += 1) {
     const seed = orderedPhrases[si];
     if (byId.size >= maxTotal) break;
     const t0 = Date.now();
+    const sizeBefore = byId.size;
     await progress?.onPhrase?.(id, {
       kind: "start",
       seedIndex1Based: si + 1,
@@ -160,6 +173,16 @@ async function fetchLinkedInResilient(
     }
     if (brokeOnError) break;
     if (byId.size >= maxTotal) break;
+    if (byId.size === sizeBefore) {
+      emptySeedStreak += 1;
+      if (emptySeedStreak >= EMPTY_SEED_ABORT_AFTER) {
+        notes.push(`stopped after ${emptySeedStreak} consecutive empty seeds`);
+        discoveryTerminalLog(`phase=fetch_seed_abort provider=${id} empty_streak=${emptySeedStreak}`);
+        break;
+      }
+    } else {
+      emptySeedStreak = 0;
+    }
   }
 
   const jobs = [...byId.values()].slice(0, maxTotal);
@@ -182,11 +205,21 @@ async function fetchIndeedResilient(
   let lastErr: string | undefined;
   const kwTotal = progress?.keywordsInListTotal ?? orderedPhrases.length;
   const seedsTotal = orderedPhrases.length;
+  let emptySeedStreak = 0;
+  const skipPw = process.env.ELIZA_DISCOVERY_PLAYWRIGHT === "0";
+  const session = skipPw ? null : await openIndeedPlaywrightSession().catch((e) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[discovery] Indeed Playwright session failed, using per-phrase/RSS path:", msg);
+    return null;
+  });
+  let indeedNav = 0;
 
+  try {
   outer: for (let si = 0; si < orderedPhrases.length; si += 1) {
     const seed = orderedPhrases[si];
     if (byId.size >= maxTotal) break;
     const t0 = Date.now();
+    const sizeBefore = byId.size;
     await progress?.onPhrase?.(id, {
       kind: "start",
       seedIndex1Based: si + 1,
@@ -196,10 +229,14 @@ async function fetchIndeedResilient(
     });
     let brokeOnError = false;
     try {
-      inner: for (const attempt of buildWideningLadder(seed)) {
+      inner: for (const attempt of exactSeedAttempts(seed)) {
         if (byId.size >= maxTotal) break outer;
         try {
-          const batch = await fetchIndeedOnce(attempt, maxTotal, preferred_location);
+          const batch = session
+            ? await scrapeIndeedJobsOnPage(session.page, attempt, maxTotal, preferred_location, {
+                firstNav: indeedNav++ === 0,
+              })
+            : await fetchIndeedOnce(attempt, maxTotal, preferred_location);
           if (batch.length === 0) {
             notes.push(`0 results for "${attempt}"`);
             continue;
@@ -239,6 +276,16 @@ async function fetchIndeedResilient(
     }
     if (brokeOnError) break;
     if (byId.size >= maxTotal) break;
+    if (byId.size === sizeBefore) {
+      emptySeedStreak += 1;
+      if (emptySeedStreak >= EMPTY_SEED_ABORT_AFTER) {
+        notes.push(`stopped after ${emptySeedStreak} consecutive empty seeds`);
+        discoveryTerminalLog(`phase=fetch_seed_abort provider=${id} empty_streak=${emptySeedStreak}`);
+        break;
+      }
+    } else {
+      emptySeedStreak = 0;
+    }
   }
 
   const jobs = [...byId.values()].slice(0, maxTotal);
@@ -246,6 +293,9 @@ async function fetchIndeedResilient(
   if (jobs.length === 0 && lastErr) return { jobs: [], hint, error: lastErr };
   if (jobs.length === 0) return { jobs: [], hint: hint ?? `Indeed: no jobs for tried searches.` };
   return { jobs, hint };
+  } finally {
+    await session?.browser.close().catch(() => {});
+  }
 }
 
 async function fetchProfessionResilient(
@@ -261,11 +311,22 @@ async function fetchProfessionResilient(
   let lastErr: string | undefined;
   const kwTotal = progress?.keywordsInListTotal ?? orderedPhrases.length;
   const seedsTotal = orderedPhrases.length;
+  let emptySeedStreak = 0;
+  const skipPw = process.env.ELIZA_DISCOVERY_PLAYWRIGHT === "0";
+  let session: ProfessionHuPlaywrightSession | undefined = skipPw
+    ? undefined
+    : await openProfessionHuPlaywrightSession().catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn("[discovery] Profession Playwright session failed, using HTTP fallback:", msg);
+        return undefined;
+      });
 
+  try {
   outer: for (let si = 0; si < orderedPhrases.length; si += 1) {
     const seed = orderedPhrases[si];
     if (byId.size >= maxTotal) break;
     const t0 = Date.now();
+    const sizeBefore = byId.size;
     await progress?.onPhrase?.(id, {
       kind: "start",
       seedIndex1Based: si + 1,
@@ -275,10 +336,13 @@ async function fetchProfessionResilient(
     });
     let brokeOnError = false;
     try {
-      inner: for (const attempt of professionSearchAttempts(seed)) {
+      inner: for (const attempt of exactSeedAttempts(seed)) {
         if (byId.size >= maxTotal) break outer;
         try {
-          const batch = await fetchProfessionOnce(attempt, 22, preferred_location);
+          if (session && !session.browser.isConnected()) {
+            session = await openProfessionHuPlaywrightSession().catch(() => undefined);
+          }
+          const batch = await fetchProfessionOnce(attempt, 22, preferred_location, session);
           if (batch.length === 0) {
             notes.push(`0 results for "${attempt}"`);
             continue;
@@ -318,6 +382,16 @@ async function fetchProfessionResilient(
     }
     if (brokeOnError) break;
     if (byId.size >= maxTotal) break;
+    if (byId.size === sizeBefore) {
+      emptySeedStreak += 1;
+      if (emptySeedStreak >= EMPTY_SEED_ABORT_AFTER) {
+        notes.push(`stopped after ${emptySeedStreak} consecutive empty seeds`);
+        discoveryTerminalLog(`phase=fetch_seed_abort provider=${id} empty_streak=${emptySeedStreak}`);
+        break;
+      }
+    } else {
+      emptySeedStreak = 0;
+    }
   }
 
   const jobs = [...byId.values()].slice(0, maxTotal);
@@ -325,6 +399,9 @@ async function fetchProfessionResilient(
   if (jobs.length === 0 && lastErr) return { jobs: [], hint, error: lastErr };
   if (jobs.length === 0) return { jobs: [], hint: hint ?? `Profession.hu: no jobs for tried searches.` };
   return { jobs, hint };
+  } finally {
+    await session?.browser.close().catch(() => {});
+  }
 }
 
 export async function fetchJobsForProviderResilient(
