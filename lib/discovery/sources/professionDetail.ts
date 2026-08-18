@@ -2,23 +2,13 @@
 import { readDiscoveryResponseText, timedDiscoveryFetch } from "../timedDiscoveryFetch";
 import { extractProfessionDescriptionFromHtml } from "./professionDetailParse";
 import { fetchJobDetailBodyPlaywright } from "./jobDetailPlaywright";
+import { normalizeProfessionDetailUrl } from "../professionHuUrlValidation";
 
 export { extractProfessionDescriptionFromHtml } from "./professionDetailParse";
+export { normalizeProfessionDetailUrl } from "../professionHuUrlValidation";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-function normalizeProfessionDetailUrl(jobUrl: string): string | null {
-  try {
-    const u = new URL(jobUrl.trim());
-    if (!u.hostname.includes("profession.hu")) return null;
-    if (!/\/allas\/\d+/i.test(u.pathname)) return null;
-    u.hash = "";
-    return u.toString().split("?")[0] ?? null;
-  } catch {
-    return null;
-  }
-}
 
 export async function enrichProfessionJobDescription(jobUrl: string): Promise<string | null> {
   const detailUrl = normalizeProfessionDetailUrl(jobUrl);

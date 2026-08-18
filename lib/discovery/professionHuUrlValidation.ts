@@ -83,6 +83,20 @@ export function isProfessionJobListingHref(href: string): boolean {
   return /\/allas\/[^?]*\d{4,}/i.test(path);
 }
 
+/** Absolute profession.hu detail URL without query/hash, or null if not a posting. */
+export function normalizeProfessionDetailUrl(jobUrl: string): string | null {
+  try {
+    const u = new URL(jobUrl.trim());
+    if (!u.hostname.replace(/^www\./, "").endsWith("profession.hu")) return null;
+    if (!isProfessionJobListingHref(u.pathname)) return null;
+    u.hash = "";
+    u.search = "";
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Maps dashboard target location (e.g. "Budapest, Hungary") to a Profession.hu path segment after `/allasok/`.
  * Returns null when unset, too broad, or not slug-safe.

@@ -41,7 +41,7 @@ Optional checks: `npm run lint`, `npx tsc --noEmit`, `npm run test:salary-oracle
 ## Discovery behavior (high level)
 
 - **Sync** ingests provider listings into the catalog; **cross-provider dedupe** uses a persisted index on disk. Eval starts as soon as the first provider returns (`ELIZA_DISCOVERY_EVAL_DURING_FETCH=0` waits until all fetches finish).
-- **`POST /api/discovery/reevaluate`** re-queues evaluation without necessarily re-fetching all listings (see route and `lib/discovery` callers).
+- **`POST /api/discovery/reevaluate`** re-queues evaluation without necessarily re-fetching all listings. Optional body **`job_id`** re-scores one listing (does not clear the other match lists). See route and `lib/discovery` callers.
 - **Suppressed job IDs** are respected across sync, re-evaluate, and queue processing.
 
 When changing discovery semantics, update **README** (Discovery Hub), **CHANGELOG**, and any new **env** knobs in **`.env.example`**.

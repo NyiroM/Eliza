@@ -67,6 +67,27 @@ export async function loadDiscoveredJobsTail(maxLines = 400): Promise<Discovered
   }
 }
 
+/** Last catalog row with this id (newest wins if the id was appended more than once). */
+export async function findDiscoveredJobById(id: string): Promise<DiscoveredJob | null> {
+  if (!id) return null;
+  let found: DiscoveredJob | null = null;
+  try {
+    const raw = await readFile(getDiscoveryJobsPath(), "utf-8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const j = JSON.parse(line) as DiscoveredJob;
+        if (j.id === id) found = j;
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no file */
+  }
+  return found;
+}
+
 /** Parse up to `maxLines` jobs from jobs.jsonl (oldest → newest). */
 export async function loadDiscoveredJobsAll(maxLines = DISCOVERY_SYNC_BACKLOG_MAX_JOBS): Promise<DiscoveredJob[]> {
   try {

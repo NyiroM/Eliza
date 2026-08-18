@@ -78,6 +78,7 @@ import {
 } from "./pipeline/locationGeographyVeto";
 import { inferLanguageRequirementVeto } from "./pipeline/languageRequirementVeto";
 import { inferNoCodeRoleVeto } from "./pipeline/noCodeRoleVeto";
+import { reviewFieldsClaimHardVeto, textClaimsHardVeto } from "./pipeline/semanticVetoConsistency";
 import {
   buildSemanticFitScoreReviewPrompt,
   type SemanticFitDecisionBrief,
@@ -290,6 +291,9 @@ function applyTacticsVetoRelaxation(
   if (!shouldSuppressHardVetoForTactics(review.veto_reason, tactics)) return review;
   const note =
     "[Constraint policy: hard veto downgraded to soft scoring for this category.]\n\n";
+  const relaxedSummary = textClaimsHardVeto(review.one_sentence_summary)
+    ? "Preference clash scored as a penalty (not a hard veto)."
+    : review.one_sentence_summary;
   const matchedLower = [...new Set((baseline.matched_skills ?? []).map((s) => s.toLowerCase()))].sort();
   const missingLower = [...new Set((baseline.missing_skills ?? []).map((s) => s.toLowerCase()))].sort();
   const cvSkillsSet = new Set((baseline.matched_skills ?? []).map((s) => s.toLowerCase()));
@@ -312,6 +316,7 @@ function applyTacticsVetoRelaxation(
       (review.mathematical_breakdown?.trim().length
         ? review.mathematical_breakdown
         : `Literal baseline reference: ${baseline.fit_score}%.`),
+    one_sentence_summary: relaxedSummary,
     metadata_fit_badge: null,
     fit_score_reconciled_from_components: false,
   };
@@ -407,6 +412,27 @@ export function parseSemanticFitReviewPayload(
   if (serverAppliedVeto) {
     vetoed = true;
     vetoReason = offlineVeto.veto_reason;
+  }
+
+  const proseOne =
+    typeof o.one_sentence_summary === "string" ? o.one_sentence_summary.trim() : "";
+  const proseNarrative =
+    typeof o.narrative_summary === "string" ? o.narrative_summary.trim() : "";
+  const proseBreakdown =
+    typeof o.mathematical_breakdown === "string" ? o.mathematical_breakdown.trim() : "";
+  if (
+    !vetoed &&
+    reviewFieldsClaimHardVeto({
+      one_sentence_summary: proseOne,
+      narrative_summary: proseNarrative,
+      mathematical_breakdown: proseBreakdown,
+      veto_reason: vetoReason,
+    })
+  ) {
+    vetoed = true;
+    if (!vetoReason) {
+      vetoReason = (proseOne || proseNarrative || "Hard constraint violation.").slice(0, 400);
+    }
   }
   const offlineGeographyVeto =
     vetoed &&

@@ -132,6 +132,8 @@ export type DiscoveryFetchLane = {
   providers_total: number;
   providers_done: number;
   jobs_added: number;
+  /** Catalog JD fill (AI reevaluate / Indeed hydrate) vs provider search. */
+  task?: "search" | "hydrate";
   started_at?: string;
   current_provider?: DiscoveryProviderId;
   seed_index?: number;

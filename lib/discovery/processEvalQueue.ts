@@ -29,6 +29,7 @@ import {
 import { scheduleEvalQueueResumeIfNeeded } from "./scheduleEvalQueueResume";
 import { loadSuppressedFilter } from "./suppressedStore";
 import { buildPipelineFailureNotMatchReason } from "./evalFailureReason";
+import { textClaimsHardVeto } from "../pipeline/semanticVetoConsistency";
 
 // Discovery card rationale: kept long enough for "Hays 2026 …  +X% hot-skills … heat very_hot
 // … synthetic estimate (diag) Refined: …" without truncation; trimmed cleanly at the last
@@ -89,9 +90,18 @@ function vetoHeadlineFromPipelineOutput(r: PipelineOutput): string | null {
   return line.replace(/^veto(ed)?:\s*/i, "").trim() || line;
 }
 
+function pipelineLooksVetoed(r: PipelineOutput): boolean {
+  return (
+    r.constraint_veto === true ||
+    r.match_strength === "Vetoed" ||
+    textClaimsHardVeto(r.one_sentence_summary) ||
+    textClaimsHardVeto(r.summary)
+  );
+}
+
 /** User-facing line(s) for storage and Dashboard (non-match list). */
 function buildNotMatchReason(r: PipelineOutput, threshold: number): string {
-  const vetoed = r.constraint_veto === true || r.match_strength === "Vetoed";
+  const vetoed = pipelineLooksVetoed(r);
   const score = typeof r.fit_score === "number" ? r.fit_score : null;
   const below = score === null || score < threshold;
 
@@ -265,9 +275,9 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
       completedIds.push(job.id);
       await clearEvalFailure(job.id);
       const r = detailed.result;
+      const vetoed = pipelineLooksVetoed(r);
       const strictWinner =
-        r.constraint_veto !== true &&
-        r.match_strength !== "Vetoed" &&
+        !vetoed &&
         typeof r.fit_score === "number" &&
         r.fit_score >= threshold;
 
@@ -287,7 +297,7 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
           salary_forecast: salaryForecastSnapshot(r.salary_analysis ?? null),
         });
       } else {
-        const fitScore = typeof r.fit_score === "number" ? r.fit_score : 0;
+        const fitScore = vetoed ? 0 : typeof r.fit_score === "number" ? r.fit_score : 0;
         await appendNonMatch({
           job_id: job.id,
           provider: job.provider,
@@ -295,7 +305,7 @@ export async function processEvalQueue(opts: ProcessEvalQueueOpts): Promise<Proc
           title: job.title,
           url: job.url,
           fit_score: fitScore,
-          constraint_veto: Boolean(r.constraint_veto),
+          constraint_veto: vetoed,
           evaluated_at: new Date().toISOString(),
           one_sentence_summary: r.one_sentence_summary?.trim() || undefined,
           not_match_reason: buildNotMatchReason(r, threshold),

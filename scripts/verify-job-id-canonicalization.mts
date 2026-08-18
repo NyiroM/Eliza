@@ -12,7 +12,7 @@ type ProfessionUrlApi = typeof import("../lib/discovery/professionHuUrlValidatio
 const professionUrl: ProfessionUrlApi =
   (professionUrlModule as unknown as { default?: ProfessionUrlApi }).default ??
   (professionUrlModule as unknown as ProfessionUrlApi);
-const { isProfessionJobListingHref } = professionUrl;
+const { isProfessionJobListingHref, normalizeProfessionDetailUrl } = professionUrl;
 
 type Equiv = { provider: string; label: string; urls: string[] };
 
@@ -124,6 +124,19 @@ assert.equal(
 assert.equal(isProfessionJobListingHref("/allas/123456-software-engineer"), true);
 assert.equal(isProfessionJobListingHref("/allasok/1?adv_pattern=x"), false);
 logResult("Profession listing href vs index URL", true);
+
+assert.equal(
+  normalizeProfessionDetailUrl(
+    "https://www.profession.hu/allas/penzugyi-asszisztens-irodavezeto-etna-kft-budapest-2963133?utm_source=x",
+  ),
+  "https://www.profession.hu/allas/penzugyi-asszisztens-irodavezeto-etna-kft-budapest-2963133",
+);
+assert.equal(
+  normalizeProfessionDetailUrl("https://www.profession.hu/allas/2963133"),
+  "https://www.profession.hu/allas/2963133",
+);
+assert.equal(normalizeProfessionDetailUrl("https://www.profession.hu/allasok/budapest"), null);
+logResult("Profession detail URL accepts slug-id and numeric /allas/ paths", true);
 
 console.log(`\nTotal: ${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

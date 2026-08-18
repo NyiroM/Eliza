@@ -89,6 +89,40 @@ function formatCompanyTitle(company: string | null | undefined, title: string): 
   return `${c} - ${title}`;
 }
 
+function TrashIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
+function ReevaluateIcon({ spinning }: { spinning?: boolean }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={spinning ? "animate-spin" : undefined}
+    >
+      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+      <path d="M16 16h5v5" />
+    </svg>
+  );
+}
+
 function useDiscoveryProgressClock(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -244,6 +278,7 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
   const [resetCatalogBusy, setResetCatalogBusy] = useState(false);
   const [resetMatchListsBusy, setResetMatchListsBusy] = useState(false);
   const [clearListsBusy, setClearListsBusy] = useState(false);
+  const [reevaluatingJobId, setReevaluatingJobId] = useState<string | null>(null);
   const syncInFlight = useRef(false);
   const intervalRef = useRef<number | null>(null);
   /** Prevents overlapping auto-resume drains when progress still shows “continuing in the background…”. */
@@ -832,6 +867,86 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
     }
   }, [cvLoaded, fetchDiscoveryProgress, loadMatches, preferredLocation, selectedModel, settings]);
 
+  const runReevaluateOne = useCallback(
+    async (jobId: string, label: string) => {
+      if (syncInFlight.current) {
+        setMessage("A discovery operation is already running.");
+        return;
+      }
+      if (!cvLoaded) {
+        setMessage("Upload and parse a CV on the Analysis tab before running AI reevaluate.");
+        return;
+      }
+      syncInFlight.current = true;
+      setBusyProvider("reevaluate");
+      setReevaluatingJobId(jobId);
+      setMessage(null);
+      void fetchDiscoveryProgress();
+      try {
+        const res = await elizaFetch("/api/discovery/reevaluate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Eliza-Internal": "true" },
+          body: JSON.stringify({
+            model: selectedModel,
+            preferred_location: preferredLocation.trim() || undefined,
+            job_id: jobId,
+          }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          blocked?: string;
+          locked?: boolean;
+          awaiting_drain?: boolean;
+          jobs_evaluated?: number;
+          new_high_matches?: number;
+          failures_pending_retry?: number;
+          failures_permanent?: number;
+          not_match_reason?: string;
+          error?: string;
+        };
+        if (data.ok === false && data.blocked) {
+          setMessage(data.blocked);
+          return;
+        }
+        if (res.status === 409 || data.locked) {
+          setMessage(
+            data.awaiting_drain
+              ? "The evaluation queue from a previous run is still draining — try again when it finishes."
+              : "Another discovery operation is already running — try again shortly.",
+          );
+          return;
+        }
+        if (!res.ok) {
+          setMessage(data.error ?? "AI reevaluate failed for this listing.");
+          return;
+        }
+        await loadMatches();
+        const thr = settings?.match_notify_threshold_percent ?? 70;
+        if ((data.failures_pending_retry ?? 0) > 0) {
+          setMessage(`AI reevaluate for “${label}” failed and will retry after cooldown.`);
+        } else if ((data.failures_permanent ?? 0) > 0) {
+          setMessage(`AI reevaluate for “${label}” failed after retries — see Evaluated, not a match.`);
+        } else if ((data.new_high_matches ?? 0) > 0) {
+          setMessage(`AI reevaluate: “${label}” is now a New match (≥ ${thr}%, passed veto).`);
+        } else if ((data.not_match_reason ?? "").trim()) {
+          setMessage(`AI reevaluate: “${label}” — ${data.not_match_reason!.trim()}`);
+        } else if ((data.jobs_evaluated ?? 0) > 0) {
+          setMessage(`AI reevaluate: “${label}” is not a match under current CV/constraints.`);
+        } else {
+          setMessage(`AI reevaluate finished for “${label}”.`);
+        }
+      } catch {
+        setMessage("Could not reach AI reevaluate API.");
+      } finally {
+        syncInFlight.current = false;
+        setBusyProvider(null);
+        setReevaluatingJobId(null);
+        void fetchDiscoveryProgress();
+      }
+    },
+    [cvLoaded, fetchDiscoveryProgress, loadMatches, preferredLocation, selectedModel, settings],
+  );
+
   /** Stale disk progress after server restart: client never received runSync’s tail, so drain must start from the dashboard. */
   const stalledDrainResumeKey = useMemo(() => {
     if (!liveProgress) return "";
@@ -1403,17 +1518,22 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                     <span className="text-emerald-400 tabular-nums">{m.fit_score}%</span>
                     <button
                       type="button"
+                      title="Re-evaluate only this listing with the current CV and constraints"
+                      aria-label="AI reevaluate this listing"
+                      disabled={busyProvider !== null}
+                      onClick={() => void runReevaluateOne(m.job_id, formatCompanyTitle(m.company, m.title))}
+                      className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-violet-300 disabled:opacity-40"
+                    >
+                      <ReevaluateIcon spinning={reevaluatingJobId === m.job_id} />
+                    </button>
+                    <button
+                      type="button"
                       title="Remove from New matches (kuka)"
                       aria-label="Remove match"
                       onClick={() => void removeMatch(m)}
                       className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-400"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                      </svg>
+                      <TrashIcon />
                     </button>
                   </div>
                 </div>
@@ -1470,17 +1590,22 @@ export default function DiscoveryHubPanel({ selectedModel, preferredLocation, cv
                     </span>
                     <button
                       type="button"
+                      title="Re-evaluate only this listing with the current CV and constraints"
+                      aria-label="AI reevaluate this listing"
+                      disabled={busyProvider !== null}
+                      onClick={() => void runReevaluateOne(m.job_id, formatCompanyTitle(m.company, m.title))}
+                      className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-violet-300 disabled:opacity-40"
+                    >
+                      <ReevaluateIcon spinning={reevaluatingJobId === m.job_id} />
+                    </button>
+                    <button
+                      type="button"
                       title="Remove from this list"
                       aria-label="Remove from not-a-match list"
                       onClick={() => void removeNonMatch(m)}
                       className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-400"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                      </svg>
+                      <TrashIcon />
                     </button>
                   </div>
                 </div>

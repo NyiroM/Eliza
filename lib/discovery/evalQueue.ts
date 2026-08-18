@@ -67,12 +67,14 @@ export async function clearEvalQueue(): Promise<void> {
 /**
  * Merge jobs into the queue (dedupe by id, keep higher priority).
  * Skips ids in `evaluatedIds`, listings in `suppressedFilter` (id or canonical URL), and failure cooldown.
+ * `forcePriority` overrides the keyword heuristic (used to run a single listing first).
  */
 export async function mergeIntoEvalQueue(
   jobs: DiscoveredJob[],
   evaluatedIds: ReadonlySet<string>,
   suppressedFilter: SuppressedFilter,
   searchKeywords: string,
+  forcePriority?: number,
 ): Promise<number> {
   const failures = await loadEvalFailureMap();
   const now = Date.now();
@@ -86,7 +88,7 @@ export async function mergeIntoEvalQueue(
     })
     .map((j) => ({
       ...j,
-      priority: scoreJobHeuristicPriority(j, searchKeywords),
+      priority: forcePriority ?? scoreJobHeuristicPriority(j, searchKeywords),
     }));
 
   if (incoming.length === 0) return 0;

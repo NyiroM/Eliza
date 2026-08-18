@@ -9,13 +9,23 @@ import {
 } from "../../../../lib/discovery/lock";
 import { getKeywordsForSync } from "../../../../lib/discovery/keywordSync";
 import { loadDiscoverySettings } from "../../../../lib/discovery/settings";
-import { loadDiscoveredJobsAll } from "../../../../lib/discovery/jobStore";
-import { resetEvaluatedJobIds } from "../../../../lib/discovery/evaluatedStore";
+import { findDiscoveredJobById, loadDiscoveredJobsAll } from "../../../../lib/discovery/jobStore";
+import { removeEvaluatedJobIds, resetEvaluatedJobIds } from "../../../../lib/discovery/evaluatedStore";
 import { hydrateThinIndeedJobs } from "../../../../lib/discovery/refreshThinIndeedCatalog";
-import { clearAllNewMatches } from "../../../../lib/discovery/matchesStore";
-import { clearAllNonMatches } from "../../../../lib/discovery/nonMatchesStore";
-import { loadSuppressedFilter } from "../../../../lib/discovery/suppressedStore";
-import { clearDiscoveryProgress, progressAwaitingClientDrain, progressQueueing, setDiscoveryProgress } from "../../../../lib/discovery/progress";
+import { clearAllNewMatches, findNewMatchRowByJobId, removeNewMatchesByJobId } from "../../../../lib/discovery/matchesStore";
+import { clearAllNonMatches, findNonMatchRowByJobId, removeNonMatchesByJobId } from "../../../../lib/discovery/nonMatchesStore";
+import { isSuppressedDiscoveredJob, loadSuppressedFilter } from "../../../../lib/discovery/suppressedStore";
+import { clearEvalFailure } from "../../../../lib/discovery/evalFailureStore";
+import {
+  clearDiscoveryProgress,
+  defaultSessionLiveStats,
+  progressAwaitingClientDrain,
+  progressQueueing,
+  progressSyncFinished,
+  readDiscoveryProgress,
+  setDiscoveryProgress,
+} from "../../../../lib/discovery/progress";
+import type { DiscoveredJob } from "../../../../types/discovery";
 import { discoveryTerminalLog } from "../../../../lib/discovery/discoveryTerminalLog";
 import { processEvalQueue } from "../../../../lib/discovery/processEvalQueue";
 import { resolveOllamaModel } from "../../../../lib/storage/resolveOllamaModel";
@@ -32,11 +42,34 @@ export const maxDuration = 300;
 
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" } as const;
 
+const SINGLE_JOB_QUEUE_PRIORITY = 1_000_000;
+
 type Body = {
   model?: unknown;
   preferred_location?: unknown;
   max_jobs?: unknown;
+  /** When set, only this catalog/list row is re-queued and scored. */
+  job_id?: unknown;
 };
+
+function listingToDiscoveredJob(row: {
+  job_id: string;
+  provider: DiscoveredJob["provider"];
+  company: string | null;
+  title: string;
+  url: string;
+  evaluated_at: string;
+}): DiscoveredJob {
+  return {
+    id: row.job_id,
+    provider: row.provider,
+    title: row.title,
+    company: row.company,
+    url: row.url,
+    description: "",
+    discovered_at: row.evaluated_at,
+  };
+}
 
 export async function POST(request: NextRequest) {
   return withActiveUser(request, async () => {
@@ -92,6 +125,12 @@ export async function POST(request: NextRequest) {
   }
   const preferred_location = ploc.preferred_location;
 
+  const jobId =
+    typeof body.job_id === "string" && body.job_id.trim().length > 0 ? body.job_id.trim() : undefined;
+  if (jobId && jobId.length > 80) {
+    return NextResponse.json({ error: "Invalid job_id." }, { status: 400, headers: NO_STORE });
+  }
+
   let maxJobs = DISCOVERY_SYNC_BACKLOG_MAX_JOBS;
   if (typeof body.max_jobs === "number" && Number.isFinite(body.max_jobs)) {
     maxJobs = Math.min(20000, Math.max(50, Math.round(body.max_jobs)));
@@ -106,11 +145,92 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await withDiscoverySyncLock(async () => {
-      await clearDiscoveryProgress().catch(() => {});
-
       const settings = await loadDiscoverySettings();
       const phrases = getKeywordsForSync(settings);
       const heuristicBlob = phrases.join(", ");
+
+      if (jobId) {
+        const prevProgress = await readDiscoveryProgress();
+        const queueBefore = await getEvalQueueLength();
+
+        const catalogJob = await findDiscoveredJobById(jobId);
+        const listRow = catalogJob
+          ? null
+          : (await findNewMatchRowByJobId(jobId)) ?? (await findNonMatchRowByJobId(jobId));
+        const job = catalogJob ?? (listRow ? listingToDiscoveredJob(listRow) : null);
+        if (!job) {
+          return { ok: false as const, blocked: "That listing is no longer in the catalog or match lists." };
+        }
+
+        const suppressedFilter = await loadSuppressedFilter();
+        if (isSuppressedDiscoveredJob(job, suppressedFilter)) {
+          return { ok: false as const, blocked: "That listing is suppressed (removed with trash)." };
+        }
+
+        await hydrateThinIndeedJobs([job]);
+        const hydrated = (await findDiscoveredJobById(job.id)) ?? job;
+
+        await Promise.all([
+          removeNewMatchesByJobId(hydrated.id),
+          removeNonMatchesByJobId(hydrated.id),
+          removeEvaluatedJobIds([hydrated.id]),
+          clearEvalFailure(hydrated.id),
+        ]);
+
+        const queued = await mergeIntoEvalQueue(
+          [hydrated],
+          new Set<string>(),
+          suppressedFilter,
+          heuristicBlob,
+          SINGLE_JOB_QUEUE_PRIORITY,
+        );
+        if (queued === 0) {
+          return { ok: false as const, blocked: "Could not queue that listing for reevaluation." };
+        }
+
+        discoveryTerminalLog(`phase=reevaluate_one job=${hydrated.id} provider=${hydrated.provider}`);
+
+        const r = await processEvalQueue({
+          model,
+          maxItems: 1,
+          draining: false,
+          deferCompletion: true,
+          ...(preferred_location !== undefined ? { preferred_location } : {}),
+        });
+
+        const queue_remaining = await getEvalQueueLength();
+        if (queueBefore === 0) {
+          markDiscoveryAwaitingDrain(false);
+          const live = await readDiscoveryProgress();
+          const s = live.sessionLiveStats ?? defaultSessionLiveStats();
+          await progressSyncFinished({
+            jobsAdded: s.newJobsAdded,
+            jobsEvaluated: s.jobsEvaluated,
+            highMatches: s.newHighMatches,
+          }).catch(() => {});
+        } else {
+          await setDiscoveryProgress(prevProgress).catch(() => {});
+        }
+
+        const matchRow = await findNewMatchRowByJobId(hydrated.id);
+        const rejectRow = matchRow ? null : await findNonMatchRowByJobId(hydrated.id);
+
+        return {
+          ok: true as const,
+          single_job: true as const,
+          jobs_considered: 1,
+          queued,
+          jobs_evaluated: r.jobs_evaluated,
+          new_high_matches: r.new_high_matches,
+          queue_remaining,
+          failures_pending_retry: r.failures_pending_retry,
+          failures_permanent: r.failures_permanent,
+          not_match_reason: rejectRow?.not_match_reason,
+          one_sentence_summary: (matchRow ?? rejectRow)?.one_sentence_summary,
+        };
+      }
+
+      await clearDiscoveryProgress().catch(() => {});
 
       if (phrases.length === 0) {
         return { ok: false as const, blocked: "Add at least one Search keyword before reevaluating." };
@@ -121,11 +241,11 @@ export async function POST(request: NextRequest) {
         return { ok: false as const, blocked: "No discovered jobs found yet. Run a sync first." };
       }
 
-      await progressQueueing(`AI reevaluate: filling Indeed descriptions, then re-queueing up to ${jobs.length} job(s)…`, true);
+      await progressQueueing(`AI reevaluate: reading ${jobs.length} catalog job(s), then filling Indeed descriptions…`, true);
       const indeedHydrated = await hydrateThinIndeedJobs(jobs);
       discoveryTerminalLog(`phase=reevaluate_indeed_hydrate hydrated=${indeedHydrated.length}`);
 
-      await progressQueueing(`AI reevaluate: resetting evaluated state and re-queueing up to ${jobs.length} job(s)…`, true);
+      await progressQueueing(`AI reevaluate: resetting match lists and queueing ${jobs.length} job(s) for scoring…`);
 
       await Promise.all([clearAllNewMatches(), clearAllNonMatches()]);
       await resetEvaluatedJobIds();
@@ -136,6 +256,14 @@ export async function POST(request: NextRequest) {
       await pruneEvalQueue(new Set<string>(), suppressedFilter);
 
       discoveryTerminalLog(`phase=reevaluate queued=${queued} jobs=${jobs.length}`);
+      await setDiscoveryProgress({
+        message: `AI reevaluate: queued ${queued} job(s). Ollama scoring starting…`,
+        sessionLiveStats: { queueRemaining: queued },
+        evalLane: {
+          status: queued > 0 ? "waiting" : "done",
+          queue_remaining: queued,
+        },
+      });
 
       let firstPass = {
         jobs_evaluated: 0,
@@ -170,7 +298,11 @@ export async function POST(request: NextRequest) {
         await progressAwaitingClientDrain(queue_remaining).catch(() => {});
       } else {
         markDiscoveryAwaitingDrain(false);
-        await clearDiscoveryProgress().catch(() => {});
+        await progressSyncFinished({
+          jobsAdded: 0,
+          jobsEvaluated: firstPass.jobs_evaluated,
+          highMatches: firstPass.new_high_matches,
+        }).catch(() => {});
       }
 
       return {
